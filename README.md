@@ -1,5 +1,5 @@
 # DC-Power-Flow-Correction
-Correcting DC power flow results with a MLP, written entirely in Julia. Work still in progress: currently only considering load demand variations in data generation. 
+Correcting DC power flow results with an MLP, written entirely in Julia. Work still in progress: currently only considering load demand variations in data generation. 
 
 `case_general_parallel.jl`: no longer maintained and originally meant to be a single source file to run everything at once. 
 
