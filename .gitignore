@@ -1,3 +1,6 @@
 
 *.log
 *.m
+*.jld2
+*.bson
+*.png
