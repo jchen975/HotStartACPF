@@ -1,43 +1,50 @@
 """
+	`using CuArrays`
 We assume there is CUDA hardware; if error(s) are reported, comment it out and
-" |> gpu" will be no-ops
+`|> gpu` will be no-ops
 """
 
 using CuArrays
 using Flux  # ML library
 using Flux.Optimise: ADAM
-using Plots
-# saving and loading files
-using JLD2, BSON
+using JLD2, BSON  # saving and loading files
 using BSON: @save
+using Plots  # plot loss and acc curves
 
 """
-	train_net(case::String, data::Array{AbstractFloat}, target::Array{AbstractFloat},
-				K1::Int64; lr::Float64=1e-3, epochs::Int64=30,
-				batch_size::Int64=64, K2::Int64=0, retrain=false)
+	train_net(case::String, data::Array{AbstractFloat},
+		target::Array{AbstractFloat}, K1::Int64, K2::Int64=0, lr::Float64=1e-3,
+		epochs::Int64=30, batch_size::Int64=64, retrain::Bool=false)
+Train an MLP with provided dataset or load trained model. Saves trained model
+with checkpointing, as well as the loss and accuracy data in current directory.
+
 ARGUMENTS:
-case: matpower case file, a string with the format of "caseXXX"
-data, target: dataset and ground truth, must be of dimension (K, N) where
-		N = number of samples, K = number of features, as specified in Flux.jl
-		documentation
-K1: a positive integer, first hidden layer size
+
+	case: matpower case file name as a string; e.g. case118
+	data, target: dataset and ground truth, must be of dimension (K, N) where N
+		= number of samples and K = number of features
+	K1: a positive integer, first hidden layer size
 
 OPTIONAL ARGUMENTS:
-lr: learning rate, default = 1e-3
-epochs: default = 30
-batch_size: a positive integer, default 64.
-K2: second hidden layer size, default DNE. In almost all cases having two hidden
-		layers is sufficient.
-retrain: if "true" and a trained model already exists in current directory, then
-		load the model, perform forward pass with data and target and exit.
-		default is "false".
 
-Saves trained model with checkpointing, as well as the loss and accuracy data
-in local directory
+	K2: second hidden layer size, default is 0. In almost all cases having two hidden
+		layers is sufficient, so no need for a K3
+	lr: learning rate, default = 1e-3
+	epochs: default = 30
+	batch_size: a positive integer, default 64
+	retrain: if `true` and a trained model already exists in current directory, then
+		load the model, perform forward pass with data and target and exit. default
+		is `false`
+
+Note that there might not be enough memory on the GPU if not running on clusters,
+	in which case... you should probably find a GPU with enough memory to ensure
+	model is well trained. Otherwise, train on a CPU. NVIDIA GTX960M is known to
+	have insufficient memory (2GB); anything with a 6GB VRAM or higher should
+	work.
 """
-function train_net(case::String, data::Array{AbstractFloat}, target::Array{AbstractFloat},
-				K1::Int64, lr::Float64=1e-3, epochs::Int64=30,
-				batch_size::Int64=64, K2::Int64=0, retrain=false)
+function train_net(case::String, data::Array{AbstractFloat},
+	target::Array{AbstractFloat}, K1::Int64, K2::Int64=0, lr::Float64=1e-3,
+	epochs::Int64=30, batch_size::Int64=64, retrain::Bool=false)
 	# Float32 should decrease memory allocation demand and run much faster on
 	# non professional GPUs
 	if typeof(data) != Array{Float32, 2}
@@ -50,7 +57,7 @@ function train_net(case::String, data::Array{AbstractFloat}, target::Array{Abstr
 
 	# check if model is trained and does not need to be retrained
 	if isfile(f) == true && retrain == false
-		log = open("output.log", "w")
+		log = open("$(case)_train_output.log", "w")
 		println(log, "Model already trained! Loading model for forward pass...")
 			start = Base.time()
 			BSON.@load string(filename, "_model.bson") model
@@ -60,14 +67,13 @@ function train_net(case::String, data::Array{AbstractFloat}, target::Array{Abstr
 			elapsed = Base.time() - start
 		println(log, "Loading model and forward pass took $(round(elapsed, digits=3)) seconds.")
 		close(log)
-
+    end
 	# separate out train (70%), validation (15%) and test (15%) data
-	# don't move train set to gpu yet; may not have enough memory
 	N = size(data)[2]
 	trainSplit = round(Int32, N*0.7)
 	valSplit = round(Int32, N*0.85)
-	trainData = data[:, 1:trainSplit]
-	trainTarget = target[:, 1:trainSplit]
+	trainData = data[:, 1:trainSplit] |> gpu
+	trainTarget = target[:, 1:trainSplit] |> gpu
 	valData = data[:, trainSplit:valSplit] |> gpu
 	valTarget = target[:, trainSplit:valSplit] |> gpu
 	testData = data[:, valSplit:end] |> gpu
@@ -107,16 +113,15 @@ function train_net(case::String, data::Array{AbstractFloat}, target::Array{Abstr
 	else
 		numBatches = 1
 		batch_size = size(trainData)[2] - 1
-
+    end
 	for epoch = 1:epochs
 		time = Base.time()
 		println("epoch: $epoch")
 		Random.shuffle!(randIdx) # to shuffle training set
-		i = 1  # Julia is 1 indexed
+		i = 1
 		for j = 1:numBatches
-			# println(j)
-			batchData = trainData[:, randIdx[i:i+batch_size]] |> gpu
-			batchTarget = trainTarget[:, randIdx[i:i+batch_size]] |> gpu
+			batchData = trainData[:, randIdx[i:i+batch_size]]
+			batchTarget = trainTarget[:, randIdx[i:i+batch_size]]
 			Flux.train!(loss, Flux.params(model), [(batchData, batchTarget)], opt)
 			epochTrainLoss += Tracker.data(loss(batchData, batchTarget))
 			epochTrainAcc += Tracker.data(accuracy(batchData, batchTarget))
@@ -141,13 +146,15 @@ function train_net(case::String, data::Array{AbstractFloat}, target::Array{Abstr
 		end
 	end
 	testAcc = Tracker.data(accuracy(testData, testTarget))  # test set accuracy
-	log = open("output.log", "w")
+	# write result to file
+	log = open("$(case)_train_output.log", "w")
 	println(log, "Finished training after $elapsedEpochs epochs and $(round(
 					training_time, digits=3)) seconds")
 	println(log, "Hyperparameters used: learning rate = $lr,
 				batch_size = $batch_size, number of hidden layers = $nlayers")
 	println(log, "Test set accuracy: $(round(testAcc*100, digits=3))%")
 	close(log)
+	# save final model
 	model = cpu(model)
 	@save string(case, "_model.bson") model  # to get weights, use Tracker.data()
 	# save loss and accuracy data
@@ -158,7 +165,7 @@ end
 
 """
 Plots the loss and accuracy curves of training and validation sets, and saves
-the figures as PNGs in local directory.
+the figures as PNGs in current directory.
 """
 function plot_results(trainLoss::Array{Float32, 1}, trainAcc::Array{Float32, 1},
 					valLoss::Array{Float32, 1}, valAcc::Array{Float32, 1}, filename::String)

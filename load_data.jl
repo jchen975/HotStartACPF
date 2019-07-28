@@ -56,10 +56,10 @@ Several notes:
 end
 
 """
+Load demand variations based on Zhen Dai's paper; NY parameters
+
 TODO: add variations for PV buses: P and Vm
 """
-
-# load variations based on Zhen Dai's paper; NY parameters
 function get_PQ_variation(PD::Array{Float64}, baseMVA::Int64, N::Int64)
 	Random.seed!(521) # random seed for reproducible outputs
 	numPQ = length(PD)
@@ -95,35 +95,41 @@ can have no loads in `PowerModels`, when parsing Matpower data, loads with
 `pd`=0.0 and `qd`=0.0 are filter out. `loadToBusIdx` is therefore a 2D array to
 help connecting load and bus indices: first column is the load indices and the
 second the corresponding bus indices.
+
 ARGUMENTS:
-N = number of samples for the dataset
-case = "caseXXX", a string representing the name of the matpower casefile to
-	parse from.
-OPTIONAL ARGUMENTS
-save_data: whether we save the computed pf results, default is false
-log: whether to print outputs to file, default is false
+
+	N = number of samples for the dataset
+	case = "caseXXX", a string representing the name of the matpower casefile to
+		parse from.
+
+OPTIONAL ARGUMENTS:
+
+	save_data: whether we save the computed pf results, default is false
+	log: whether to print outputs to file, default is false
+
 Note that for precompilation, it is best to run `load_data` first with a small
 	N once or twice, then the intended N with both save_data and log as true.
 	Also, `@time` macro should be placed before calling load_data if we want to
 	benchmark the performance, both time and memory usage. This will include the
 	pure pf time and other overhead.
 """
-function load_data(case::String, N::Int64, save_data::Bool=false, log::Bool=false)
-	if isfile(string(case, "_pf_results.jld2")) == true
-		f = string(case, "_pf_results.jld2")
-		data = FileIO.load(f)["data"]
-		target = FileIO.load(f)["target"]
+function load_data(case::String, N::Int64, save_data::Bool=false,
+					log::Bool=false, reload::Bool=false)
+	if isfile(string(case, "_pf_results.jld2")) == true && reload == false
+		## Uncomment if running in REPL and calling train_net next
+		# f = string(case, "_pf_results.jld2")
+		# data = FileIO.load(f)["data"]
+		# target = FileIO.load(f)["target"]
 		if log == true
 			log = open("$(case)_pf_output.log", "w")
-			println(log, "Total load data performance:")
+			println(log, "Dataset already exists in current directory.")
+			println("Total load data performance:")
 			close(log)
 		end
-		return data, target
+		# return data, target
 	end
-
 	# read matpower case file
 	network_data = parse_file(string(case, ".m"))
-	# bus = network_data["bus"]  # a dictionary containing bus info (NOT USED)
 	load = network_data["load"]
 	baseMVA = network_data["baseMVA"]
 	numPQ = length(load) # since load dictionary ignores 0 entries, its size <= length(bus)
@@ -207,5 +213,6 @@ function load_data(case::String, N::Int64, save_data::Bool=false, log::Bool=fals
 	if save_data == true
 		save(string(case, "_pf_results.jld2"), "data", data, "target", target)
 	end
+	## Uncomment if running in REPL and calling train_net next
 	# return data, target
 end
