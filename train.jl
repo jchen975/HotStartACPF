@@ -1,7 +1,8 @@
-'''
+"""
 We assume there is CUDA hardware; if error(s) are reported, comment it out and
 " |> gpu" will be no-ops
-'''
+"""
+
 using CuArrays
 using Flux  # ML library
 using Flux.Optimise: ADAM
@@ -10,7 +11,10 @@ using Plots
 using JLD2, BSON
 using BSON: @save
 
-'''
+"""
+	train_net(case::String, data::Array{AbstractFloat}, target::Array{AbstractFloat},
+				K1::Int64; lr::Float64=1e-3, epochs::Int64=30,
+				batch_size::Int64=64, K2::Int64=0, retrain=false)
 ARGUMENTS:
 case: matpower case file, a string with the format of "caseXXX"
 data, target: dataset and ground truth, must be of dimension (K, N) where
@@ -18,10 +22,10 @@ data, target: dataset and ground truth, must be of dimension (K, N) where
 		documentation
 K1: a positive integer, first hidden layer size
 
-KEYWORD ARGUMENTS:
+OPTIONAL ARGUMENTS:
 lr: learning rate, default = 1e-3
 epochs: default = 30
-batch_size: a positive integer default 64.
+batch_size: a positive integer, default 64.
 K2: second hidden layer size, default DNE. In almost all cases having two hidden
 		layers is sufficient.
 retrain: if "true" and a trained model already exists in current directory, then
@@ -30,9 +34,9 @@ retrain: if "true" and a trained model already exists in current directory, then
 
 Saves trained model with checkpointing, as well as the loss and accuracy data
 in local directory
-'''
+"""
 function train_net(case::String, data::Array{AbstractFloat}, target::Array{AbstractFloat},
-				K1::Int64; lr::Float64=1e-3, epochs::Int64=30,
+				K1::Int64, lr::Float64=1e-3, epochs::Int64=30,
 				batch_size::Int64=64, K2::Int64=0, retrain=false)
 	# Float32 should decrease memory allocation demand and run much faster on
 	# non professional GPUs
@@ -152,10 +156,10 @@ function train_net(case::String, data::Array{AbstractFloat}, target::Array{Abstr
 	plot_results(trainLoss, trainAcc, valLoss, valAcc, case)
 end
 
-'''
+"""
 Plots the loss and accuracy curves of training and validation sets, and saves
 the figures as PNGs in local directory.
-'''
+"""
 function plot_results(trainLoss::Array{Float32, 1}, trainAcc::Array{Float32, 1},
 					valLoss::Array{Float32, 1}, valAcc::Array{Float32, 1}, filename::String)
 	minAcc = min(minimum(trainAcc), minimum(valAcc))*.9  # for y axis limit
