@@ -1,3 +1,4 @@
+using Distributed  # parallelize pf computations
 using Distributions
 using Distributions: Random
 using JLD2, FileIO
@@ -7,21 +8,33 @@ const PQ_BUS = 1
 const PV_BUS = 2
 const REF_BUS = 3
 
+'''
+Only add processors if none has been added. The number of procs in addprocs()
+will be the ones doing parallel pf computation, so should be ~40 on clusters and
+5~7 on computers with 8 logical processors.
+When running on clusters, the third argument in bash file should be the number
+of worker processes to add. If none, then default to 5.
+'''
+if nprocs() == 1
+	if length(ARGS) == 3
+		addprocs(ARGS[3])
+	else
+		addprocs(5)
+end
+
 @everywhere using ParallelDataTransfer
 @everywhere using PowerModels, JuMP, Ipopt # powerl flow packages
 
-"""
-	compute_pf(i::Int64)
-
+'''
 Parallel power flow computation
 
 After creating the P, Q matrices and parsing a matpower case file, compute
 DC and AC power flow in parallel as follows:
 	1. Pass P, Q, network_data to all worker processes
-	2. Using `pmap()` and its argument `i`, each worker process will first make a
-		deep copy of `network_data` dictionary, and then use the i-th column of
-		P, Q to update the `pd`, `qd` fields for all loads in `network_data`. Each
-		worker process will then use the `run_dc_pf` and `run_ac_pf` functions in
+	2. Using pmap() and its argument i, each worker process will first make a
+		deep copy of network_data dictionary, and then use the i-th column of
+		P, Q to update the pd, qd fields for all loads in network_data. Each
+		worker process will then use the run_dc_pf and run_ac_pf functions in
 		PowerModels to compute the DC and AC power flow results. Finally, each
 		worker returns the DC, AC power flow solutions and solution times as an
 		array of type Any, with the first two element being the solutions
@@ -32,12 +45,10 @@ DC and AC power flow in parallel as follows:
 		to the deep copied network_data, which is an overhead.
 
 Several notes:
-	1. `@everywhere` macro must be placed before all function definitions and
-		`using` statements if they are shared by workers
-	2. `addprocs()`` must be called before all @everywhere instances
-"""
-# not sure why but if there's no empty line between """ and @everwhere
-# docstring breaks
+	1. @everywhere macro must be placed before all function definitions and
+		"using" statements if they are shared by workers
+	2. addprocs() must be called before all @everywhere instances
+'''
 @everywhere function compute_pf(i::Int64)
 	# println(i)  # uncomment this if you want to see which worker is executing what
 	network = deepcopy(ndata)  # we need to write to network dict so make copy
@@ -58,10 +69,9 @@ Several notes:
 	return ret
 end
 
-"""
+'''
 TODO: add variations for PV buses: P and Vm
-"""
-
+'''
 # load variations based on Zhen Dai's paper; NY parameters
 function get_PQ_variation(PD::Array{Float64}, baseMVA::Int64, N::Int64)
 	Random.seed!(521) # random seed for reproducible outputs
@@ -85,44 +95,42 @@ function get_PQ_variation(PD::Array{Float64}, baseMVA::Int64, N::Int64)
 	return PD, QD
 end
 
-"""
-	load_data(case::String, N::Int64, save_data::Bool=false, log::Bool=false)
-
+'''
 Perform dc and ac power flow computations or load existing data
 
-`PowerModels` parses matpower casefiles into a dictionary of dictionaries, where
+PowerModels parses matpower casefiles into a dictionary of dictionaries, where
 loads are viewed as explicit components that are separate from buses (they are
 two distinct dictionaries). So a bus can have none, 1, or many loads. The load
 objects have unique ids, which are independent from the bus ids. These load
 object ids are the keys in the load dictionary and the index value. The
-`load_bus` value specifies which bus id the load is connected to. Because buses
-can have no loads in `PowerModels`, when parsing Matpower data, loads with
-`pd`=0.0 and `qd`=0.0 are filter out. `loadToBusIdx` is therefore a 2D array to
-help connecting load and bus indices: first column is the load indices and the
-second the corresponding bus indices.
+"load_bus" value tells you which bus id the load is connected to. Because buses
+can have no loads in PowerModels, when parsing Matpower data, loads with pd=0.0
+and qd=0.0 are filter out. loadToBusIdx is a 2D array to help connecting load
+and bus indices: first column is the load indices and the second the
+corresponding bus indices.
 
 ARGUMENTS:
 N = number of samples for the dataset
 case = "caseXXX", a string representing the name of the matpower casefile to
 	parse from.
 
-OPTIONAL ARGUMENTS
+KEYWORD ARGUMENTS
 save_data: whether we save the computed pf results, default is false
 log: whether to print outputs to file, default is false
 
-Note that for precompilation, it is best to run `load_data` first with a small
+Note that for precompilation, it is best to run the load_data first with a small
 	N once or twice, then the intended N with both save_data and log as true.
-	Also, `@time` macro should be placed before calling load_data if we want to
+	Also, @time macro should be placed before calling load_data if we want to
 	benchmark the performance, both time and memory usage. This will include the
 	pure pf time and other overhead.
-"""
-function load_data(case::String, N::Int64, save_data::Bool=false, log::Bool=false)
-	if isfile(string(case, "_pf_results.jld2")) == true
-		f = string(case, "_pf_results.jld2")
+'''
+function load_data(N::Int64, case::String; save_data=false, log=false)
+	if isfile(string(case, "_pf_results_parallel.jld2")) == true
+		f = string(case, "_pf_results_parallel.jld2")
 		data = FileIO.load(f)["data"]
 		target = FileIO.load(f)["target"]
 		if log == true
-			log = open("$(case)_pf_output.log", "w")
+			log = open("output.log", "w")
 			println(log, "Total load data performance:")
 			close(log)
 		end
@@ -202,7 +210,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false, log::Bool=fals
 	# since that also has other overhead like network data dict accessing
 	# only write to output.log if we're saving data, i.e. not test runs
 	if save_data == true && log == true
-		log = open("$(case)_pf_output.log", "w")
+		log = open("output.log", "w")
 		println(log, "Number of workers: $(nprocs()-1)")
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
 		println(log, "  => dcpf: $(round(dc, digits=3)) %")
@@ -215,5 +223,5 @@ function load_data(case::String, N::Int64, save_data::Bool=false, log::Bool=fals
 	if save_data == true
 		save(string(case, "_pf_results.jld2"), "data", data, "target", target)
 	end
-	# return data, target
+	return data, target
 end
