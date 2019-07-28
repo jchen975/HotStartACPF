@@ -57,17 +57,21 @@ function train_net(case::String, data::Array{AbstractFloat},
 
 	# check if model is trained and does not need to be retrained
 	if isfile(f) == true && retrain == false
-		log = open("$(case)_train_output.log", "w")
+		log = open("$(case)_train_output.log", "a")
 		println(log, "Model already trained! Loading model for forward pass...")
-			start = Base.time()
-			BSON.@load string(filename, "_model.bson") model
-			model |> gpu
-			data |> gpu
-			predict = model(data)  # do stuff with this
-			elapsed = Base.time() - start
+		start = Base.time()
+		BSON.@load string(filename, "_model.bson") model
+		model |> gpu
+		data |> gpu
+		predict = model(data)
+		elapsed = Base.time() - start
 		println(log, "Loading model and forward pass took $(round(elapsed, digits=3)) seconds.")
+		# save predict to current directory
+		save("$(case)_predict.jld2", "predict", predict)
+		println(log, "Saved predicted results to current directory as $(case)_predict.jld2")
 		close(log)
     end
+
 	# separate out train (70%), validation (15%) and test (15%) data
 	N = size(data)[2]
 	trainSplit = round(Int32, N*0.7)
@@ -147,7 +151,7 @@ function train_net(case::String, data::Array{AbstractFloat},
 	end
 	testAcc = Tracker.data(accuracy(testData, testTarget))  # test set accuracy
 	# write result to file
-	log = open("$(case)_train_output.log", "w")
+	log = open("$(case)_train_output.log", "a")
 	println(log, "Finished training after $elapsedEpochs epochs and $(round(
 					training_time, digits=3)) seconds")
 	println(log, "Hyperparameters used: learning rate = $lr,

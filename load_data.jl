@@ -121,7 +121,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		# data = FileIO.load(f)["data"]
 		# target = FileIO.load(f)["target"]
 		if log == true
-			log = open("$(case)_pf_output.log", "w")
+			log = open("$(case)_pf_output.log", "a")
 			println(log, "Dataset already exists in current directory.")
 			println("Total load data performance:")
 			close(log)
@@ -144,7 +144,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	end
 	PD, QD = get_PQ_variation(PD, baseMVA, N)
 	if save_data == true
-		save(string(case, "_pq_values_parallel.jld2"), "PD", PD, "QD", QD)
+		save("$(case)_pq_values.jld2", "PD", PD, "QD", QD)
 	end
 
 	# generate input and label for NN
@@ -200,7 +200,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# since that also has other overhead like network data dict accessing
 	# only write to output.log if we're saving data, i.e. not test runs
 	if save_data == true && log == true
-		log = open("$(case)_pf_output.log", "w")
+		log = open("$(case)_pf_output.log", "a")
 		println(log, "Number of workers: $(nprocs()-1)")
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
 		println(log, "  => dcpf: $(round(dc, digits=3)) %")
@@ -211,7 +211,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	end
 	# save data and target to disk
 	if save_data == true
-		save(string(case, "_pf_results.jld2"), "data", data, "target", target)
+		save("$(case)_pf_results.jld2", "data", data, "target", target)
 	end
 	## Uncomment if running in REPL and calling train_net next
 	# return data, target
