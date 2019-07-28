@@ -1,0 +1,5 @@
+Number of workers: 5
+Total power flow computation time: 84.805 seconds
+  => dcpf: 7.712 %
+  => acpf: 92.288 %
+Extracting results time: 0.462 seconds
