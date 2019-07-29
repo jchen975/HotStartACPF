@@ -28,7 +28,7 @@ if length(ARGS) == 3
 		addprocs(nworker)
 	end
 	include("load_data.jl")
-	log = open("$(case)_train_output.log", "a")  # record current time stamp
+	log = open("$(case)_pf_output.log", "a")  # record current time stamp
 	println(log, now())
 	close(log)
 
