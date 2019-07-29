@@ -63,6 +63,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		save("$(case)_predict.jld2", "predict", predict)
 		println(log, "Saved predicted results to current directory as $(case)_predict.jld2")
 		close(log)
+		return nothing
     end
 
 	# separate out train (70%), validation (15%) and test (15%) data
