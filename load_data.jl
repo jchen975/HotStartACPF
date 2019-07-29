@@ -115,21 +115,21 @@ Note that for precompilation, it is best to run `load_data` first with a small
 """
 function load_data(case::String, N::Int64, save_data::Bool=false,
 					log::Bool=false, reload::Bool=false)
-	if isfile(string(case, "_pf_results.jld2")) == true && reload == false
+	if isfile("$(case)_pf_results.jld2") == true && reload == false
 		## Uncomment if running in REPL and calling train_net next
-		# f = string(case, "_pf_results.jld2")
+		# f = "$(case)_pf_results.jld2")
 		# data = FileIO.load(f)["data"]
 		# target = FileIO.load(f)["target"]
 		if log == true
-			log = open("$(case)_pf_output.log", "a")
+			log = open("$(case)_output_pf.log", "a")
 			println(log, "Dataset already exists in current directory.")
-			println("Total load data performance:")
+			# println("Total load data performance:")
 			close(log)
 		end
-		# return data, target
+		return nothing
 	end
 	# read matpower case file
-	network_data = parse_file(string(case, ".m"))
+	network_data = parse_file("$case.m")
 	load = network_data["load"]
 	baseMVA = network_data["baseMVA"]
 	numPQ = length(load) # since load dictionary ignores 0 entries, its size <= length(bus)
@@ -200,7 +200,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# since that also has other overhead like network data dict accessing
 	# only write to output.log if we're saving data, i.e. not test runs
 	if save_data == true && log == true
-		log = open("$(case)_pf_output.log", "a")
+		log = open("$(case)_output_pf.log", "a")
 		println(log, "Number of workers: $(nprocs()-1)")
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
 		println(log, "  => dcpf: $(round(dc, digits=3)) %")
@@ -215,4 +215,5 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	end
 	## Uncomment if running in REPL and calling train_net next
 	# return data, target
+	return nothing
 end
