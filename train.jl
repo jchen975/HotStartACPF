@@ -7,14 +7,16 @@ We assume there is CUDA hardware; if error(s) are reported, comment it out and
 using CuArrays
 using Flux  # ML library
 using Flux.Optimise: ADAM
+using Statistics # to use mean()
+using Random  # shuffling for mini batch; not setting a randome seed here
 using JLD2, BSON  # saving and loading files
 using BSON: @save
 using Plots  # plot loss and acc curves
 
 """
-	train_net(case::String, data::Array{AbstractFloat},
-		target::Array{AbstractFloat}, K1::Int64, K2::Int64=0, lr::Float64=1e-3,
-		epochs::Int64=30, batch_size::Int64=64, retrain::Bool=false)
+	train_net(case::String, data::Array{Float32}, target::Array{Float32},
+		K1::Int64, K2::Int64=0, lr::Float64=1e-3, epochs::Int64=30,
+		batch_size::Int64=64, retrain::Bool=false)
 Train an MLP with provided dataset or load trained model. Saves trained model
 with checkpointing, as well as the loss and accuracy data in current directory.
 
@@ -42,25 +44,16 @@ Note that there might not be enough memory on the GPU if not running on clusters
 	have insufficient memory (2GB); anything with a 6GB VRAM or higher should
 	work.
 """
-function train_net(case::String, data::Array{AbstractFloat},
-	target::Array{AbstractFloat}, K1::Int64, K2::Int64=0, lr::Float64=1e-3,
-	epochs::Int64=30, batch_size::Int64=64, retrain::Bool=false)
-	# Float32 should decrease memory allocation demand and run much faster on
-	# non professional GPUs
-	if typeof(data) != Array{Float32, 2}
-		data = convert(Array{Float32}, data)
-	end
-	if typeof(target) != Array{Float32, 2}
-		target = convert(Array{Float32}, target)
-	end
-	f = string(case, "_model.bson")
+function train_net(case::String, data::Array{Float32}, target::Array{Float32},
+	K1::Int64, K2::Int64=0, lr::Float64=1e-3, epochs::Int64=30,
+	batch_size::Int64=64, retrain::Bool=false)
 
 	# check if model is trained and does not need to be retrained
-	if isfile(f) == true && retrain == false
+	if isfile("$(case)_model.bson") == true && retrain == false
 		log = open("$(case)_train_output.log", "a")
 		println(log, "Model already trained! Loading model for forward pass...")
 		start = Base.time()
-		BSON.@load string(filename, "_model.bson") model
+		BSON.@load "$(case)_model.bson" model
 		model |> gpu
 		data |> gpu
 		predict = model(data)
@@ -142,7 +135,7 @@ function train_net(case::String, data::Array{AbstractFloat},
 		# checkpoint if val acc increased; to load, change @save to @load
 		if epoch > 1 && valAcc[end] > valAcc[end-1]
 			model_checkpt = cpu(model)
-			@save string(case, "_ep", epoch, "_model.bson") model_checkpt  # to get weights, use Tracker.data()
+			@save "$(case)_model_ep$epoch.bson" model_checkpt  # to get weights, use Tracker.data()
 		end
 		# early exit condition
 		if trainAcc[end] > 0.99 && valAcc[end] > 0.99
@@ -154,16 +147,16 @@ function train_net(case::String, data::Array{AbstractFloat},
 	log = open("$(case)_train_output.log", "a")
 	println(log, "Finished training after $elapsedEpochs epochs and $(round(
 					training_time, digits=3)) seconds")
-	println(log, "Hyperparameters used: learning rate = $lr,
-				batch_size = $batch_size, number of hidden layers = $nlayers")
+	println(log, "Hyperparameters used: learning rate = $lr, "
+				* "batch_size = $batch_size, number of hidden layers = $nlayers")
 	println(log, "Test set accuracy: $(round(testAcc*100, digits=3))%")
 	close(log)
 	# save final model
 	model = cpu(model)
-	@save string(case, "_model.bson") model  # to get weights, use Tracker.data()
+	@save "$(case)_model.bson" model  # to get weights, use Tracker.data()
 	# save loss and accuracy data
-	save(string(case, "loss_acc_data.jld2"),
-		"trainLoss", trainLoss, "trainAcc", trainAcc, "valLoss", valLoss, "valAcc", valAcc)
+	save("$(case)_loss_acc_data.jld2", "trainLoss", trainLoss,
+		"trainAcc", trainAcc, "valLoss", valLoss, "valAcc", valAcc)
 	plot_results(trainLoss, trainAcc, valLoss, valAcc, case)
 end
 
@@ -172,15 +165,15 @@ Plots the loss and accuracy curves of training and validation sets, and saves
 the figures as PNGs in current directory.
 """
 function plot_results(trainLoss::Array{Float32, 1}, trainAcc::Array{Float32, 1},
-					valLoss::Array{Float32, 1}, valAcc::Array{Float32, 1}, filename::String)
+					valLoss::Array{Float32, 1}, valAcc::Array{Float32, 1}, case::String)
 	minAcc = min(minimum(trainAcc), minimum(valAcc))*.9  # for y axis limit
 	n = collect(1:1:length(trainLoss))  # horizontal axis
 	labels = ["Training", "Validation"]
 
 	plot(n, trainLoss, title="Loss", label=labels[1], xlabel="epoch", ylabel="loss")
 	plot!(n, valLoss, label=labels[2], xlabel="epoch", ylabel="loss")
-	png(string(filename, "_loss_plot"))
+	png("$(case)_loss_plot")
 	plot(n, trainAcc, title="Accuracy", label=labels[1], xlabel="epoch", ylabel="accuracy")
 	plot!(n, valAcc, label=labels[2], xlabel="epoch", ylabel="accuracy", legend=:right, ylims=(minAcc, 1))
-	png(string(filename, "_accuracy_plot"))
+	png("$(case)_accuracy_plot")
 end
