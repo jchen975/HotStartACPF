@@ -142,9 +142,16 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		PD[i] = load[string(i)]["pd"]
 		loadToBusIdx[i, 2] = load[string(i)]["load_bus"] # record corresponding bus number
 	end
-	PD, QD = get_PQ_variation(PD, baseMVA, N)
-	if save_data == true
-		save("$(case)_pq_values.jld2", "PD", PD, "QD", QD)
+
+	# calculate PD, QD variations if haven't done so already
+	if isfile("$(case)_pq_values.jld2") == false
+		PD, QD = get_PQ_variation(PD, baseMVA, N)
+		if save_data == true
+			save("$(case)_pq_values.jld2", "PD", PD, "QD", QD)
+		end
+	else 
+		PD = FileIO.load("$(case)_pq_values.jld2")["PD"]
+		QD = FileIO.load("$(case)_pq_values.jld2")["QD"]
 	end
 
 	# generate input and label for NN
@@ -203,7 +210,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		println(log, "Number of workers: $(nprocs()-1)")
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
 		println(log, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc, digits=3))%)")
-		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac, digits=3))%"))
+		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac, digits=3))%)")
 		println(log, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
 		println("Total load data performance:")
 		close(log)
