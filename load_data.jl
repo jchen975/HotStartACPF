@@ -135,11 +135,11 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	numPQ = length(load) # since load dictionary ignores 0 entries, its size <= length(bus)
 
 	# first col is loadIdx, second is its corresponding bus idx
-	loadToBusIdx = zeros(Int32, numPQ, 2)
+	# ordered by loadIdx
+	loadToBusIdx = hcat(collect(Int64, 1:1:numPQ), zeros(Int64, numPQ))
 	PD = zeros(numPQ)
 	for i = 1:numPQ
 		PD[i] = load[string(i)]["pd"]
-		loadToBusIdx[i, 1] = 1  # ordered by load index
 		loadToBusIdx[i, 2] = load[string(i)]["load_bus"] # record corresponding bus number
 	end
 	PD, QD = get_PQ_variation(PD, baseMVA, N)
@@ -155,9 +155,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	sendto(workers(), ndata = network_data, P = PD, Q = QD, numPQ = numPQ)  # so that every worker can access this
 
 	# run dc and ac pf in parallel
-	time = Base.time()
 	ret = pmap(compute_pf, 1:N)
-	pf_time = Base.time() - time
 
 	numFeature = Int32(4)  # pd, qd, vm_dc, va_dc, 1 PQ bus
 	numTarget = Int32(2)  # vm_ac, va_ac
@@ -193,8 +191,9 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# currently dc_time and ac_time are both *actual* times, i.e. there are
 	# overlaps between workers due to parallel execution; the ratio however is
 	# true, so normalize it down with total parallel pf time
-	dc = (dc_time / (dc_time+ac_time)) * 100.0
-	ac = (ac_time / (dc_time+ac_time)) * 100.0
+	pf_time = dc_time + ac_time
+	dc = (dc_time / pf_time) * 100.0
+	ac = (ac_time / pf_time) * 100.0
 
 	# DC and AC computation time; will be less than the @time macro in main()
 	# since that also has other overhead like network data dict accessing
@@ -203,8 +202,8 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		log = open("$(case)_output_pf.log", "a")
 		println(log, "Number of workers: $(nprocs()-1)")
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
-		println(log, "  => dcpf: $(round(dc, digits=3)) %")
-		println(log, "  => acpf: $(round(ac, digits=3)) %")
+		println(log, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc, digits=3))%)")
+		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac, digits=3))%"))
 		println(log, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
 		println("Total load data performance:")
 		close(log)
