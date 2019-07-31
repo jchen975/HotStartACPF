@@ -81,7 +81,7 @@ function hot_start_acpf(case::String)
 		ac_time += ret[i][2]
 	end
 	reduce_time = Base.time() - time
-	log = open("$(case)_output_pf.log", "a")
+	log = open("$(case)_output_hot_start_acpf.log", "a")
 	println(log, "AC power flow computation with hot start time: $(round(
 			pf_time, digits=3)) seconds")
 	close(log)
