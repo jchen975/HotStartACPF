@@ -36,7 +36,7 @@ if error == false
 	end
 	include("load_data.jl")
 	# record current time stamp at the start of log
-	log = open("$(case)_pf_output.log", "a")
+	log = open("$(case)_output_pf.log", "a")
 	println(log, now())
 	if reload == true
 		println(log, "Force generating new dataset even if one exists.")
