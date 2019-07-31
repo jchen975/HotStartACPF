@@ -149,7 +149,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		if save_data == true
 			save("$(case)_pq_values.jld2", "PD", PD, "QD", QD)
 		end
-	else 
+	else
 		PD = FileIO.load("$(case)_pq_values.jld2")["PD"]
 		QD = FileIO.load("$(case)_pq_values.jld2")["QD"]
 	end
@@ -162,7 +162,9 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	sendto(workers(), ndata = network_data, P = PD, Q = QD, numPQ = numPQ)  # so that every worker can access this
 
 	# run dc and ac pf in parallel
+	time = Base.time()
 	ret = pmap(compute_pf, 1:N)
+	pf_time = Base.time() - time
 
 	numFeature = Int32(4)  # pd, qd, vm_dc, va_dc, 1 PQ bus
 	numTarget = Int32(2)  # vm_ac, va_ac
@@ -198,9 +200,10 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# currently dc_time and ac_time are both *actual* times, i.e. there are
 	# overlaps between workers due to parallel execution; the ratio however is
 	# true, so normalize it down with total parallel pf time
-	pf_time = dc_time + ac_time
-	dc = (dc_time / pf_time) * 100.0
-	ac = (ac_time / pf_time) * 100.0
+	dc = (dc_time / (dc_time + ac_time))
+	ac = (ac_time / (dc_time + ac_time))
+	dc_time = dc * pf_time
+	ac_time = ac * pf_time
 
 	# DC and AC computation time; will be less than the @time macro in main()
 	# since that also has other overhead like network data dict accessing
@@ -209,8 +212,8 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		log = open("$(case)_output_pf.log", "a")
 		println(log, "Number of workers: $(nprocs()-1)")
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
-		println(log, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc, digits=3))%)")
-		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac, digits=3))%)")
+		println(log, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc*100.0, digits=3))%)")
+		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac*100.0, digits=3))%)")
 		println(log, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
 		println("Total load data performance:")
 		close(log)
