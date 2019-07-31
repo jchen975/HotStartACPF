@@ -60,7 +60,7 @@ Load demand variations based on Zhen Dai's paper; NY parameters
 
 TODO: add variations for PV buses: P and Vm
 """
-function get_PQ_variation(PD::Array{Float64}, baseMVA::Int64, N::Int64)
+function get_PQ_variation(PD::Array{Float64}, baseMVA::Float64, N::Int64)
 	Random.seed!(521) # random seed for reproducible outputs
 	numPQ = length(PD)
 	P̄ = mean(PD) * baseMVA
@@ -131,7 +131,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# read matpower case file
 	network_data = parse_file("$case.m")
 	load = network_data["load"]
-	baseMVA = network_data["baseMVA"]
+	baseMVA = float(network_data["baseMVA"])  # cast as Float64
 	numPQ = length(load) # since load dictionary ignores 0 entries, its size <= length(bus)
 
 	# first col is loadIdx, second is its corresponding bus idx
