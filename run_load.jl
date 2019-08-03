@@ -28,7 +28,6 @@ if error == false
 	N = parse(Int64, ARGS[2])  # number of samples, is Int
 	nworker = parse(Int64, ARGS[3])  # number of worker processes, is Int
 	reload = (ARGS[4]=="Y" || ARGS[4]=="y") ? true : false
-	println("Running load_data for $case, $N samples, with $nworker workers")
 
 	# only add worker processes and include load_data.jl if passes error checking
 	if nprocs() == 1
@@ -38,6 +37,7 @@ if error == false
 	# record current time stamp at the start of log
 	log = open("$(case)_output_pf.log", "a")
 	println(log, now())
+	println(log, "Running load_data for $case, $N samples, with $(length(workers())) workers")
 	if reload == true
 		println(log, "Force generating new dataset even if one exists.")
 	end
@@ -50,4 +50,5 @@ if error == false
 	println("Finished warming up, starting data generation of $N samples with $nworker workers")
 	@time load_data(case, N, true, true, reload)  # full set and save outputs to file
 	println("Program finished. Exiting...")
+	rmprocs(workers())
 end
