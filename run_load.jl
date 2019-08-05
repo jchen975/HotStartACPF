@@ -34,8 +34,8 @@ if error == false
 		addprocs(nworker)
 	end
 	include("load_data.jl")
-	# record current time stamp at the start of log
-	log = open("$(case)_output_pf.log", "a")
+	# record current time stamp at the start of log; overwrite existing file's content
+	log = open("$(case)_output_pf.log", "w")
 	println(log, now())
 	println(log, "Running load_data for $case, $N samples, with $(length(workers())) workers")
 	if reload == true
@@ -43,12 +43,12 @@ if error == false
 	end
 	close(log)
 
-	load_data(case, 10)  # precompilation run 1
-	println("Warm up 1 successeful")
-	load_data(case, 20)  # precompilation run 2
-	println("Warm up 2 successeful")
+	for i = 1:2   # precompilation run
+		load_data(case, 20)
+		println("Warm up $i successeful")
+	end
 	println("Finished warming up. Starting data generation of $N samples with $nworker workers")
 	@time load_data(case, N, true, true, reload)  # full set and save outputs to file
 	println("Program finished. Exiting...")
-	rmprocs(workers())
+	rmprocs(workers())  # remove all worker processes
 end
