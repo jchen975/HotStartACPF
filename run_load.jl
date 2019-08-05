@@ -47,7 +47,7 @@ if error == false
 	println("Warm up 1 successeful")
 	load_data(case, 20)  # precompilation run 2
 	println("Warm up 2 successeful")
-	println("Finished warming up, starting data generation of $N samples with $nworker workers")
+	println("Finished warming up. Starting data generation of $N samples with $nworker workers")
 	@time load_data(case, N, true, true, reload)  # full set and save outputs to file
 	println("Program finished. Exiting...")
 	rmprocs(workers())
