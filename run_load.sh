@@ -17,12 +17,12 @@ module load gcc/7.3.0 julia/1.1.1  # enable julia
 
 N=10000
 nprocs=30
+casefiles=("case30" "case118" "case300" "case2869" "case13659")
 
-julia run_load.jl case30 $N $nprocs Y >> run_load.log
-julia run_load.jl case118 $N $nprocs Y >> run_load.log
-julia run_load.jl case300 $N $nprocs Y >> run_load.log
-julia run_load.jl case2869 $N $nprocs Y >> run_load.log
-julia run_load.jl case13659 $N $nprocs Y >> run_load.log
+for case in ${casefiles[*]}
+do
+    julia run_load.jl "$case" "$N" "$nprocs" Y >> run_load.log
+done
 
 echo "------------------------------------------------------------------------" >> run_load.log
 echo >> run_load.log
