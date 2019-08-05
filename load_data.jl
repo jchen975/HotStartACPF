@@ -214,6 +214,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
 		println(log, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc*100.0, digits=3))%)")
 		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac*100.0, digits=3))%)")
+		println(log, "  acpf time is $(round(ac/dc, digits=3)) times longer than dcpf")
 		println(log, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
 		println("Total load data performance:")
 		close(log)
