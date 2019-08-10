@@ -44,14 +44,18 @@ Several notes:
 	end
 	PowerModels.silence()
 	opt = Ipopt.Optimizer
-	dc_result = run_dc_pf(network, JuMP.with_optimizer(opt, print_level=0))
-	ac_result = run_ac_pf(network, JuMP.with_optimizer(opt, print_level=0))
+
+	dc_result = run_dc_pf(network, with_optimizer(
+					opt, print_level=0, tol=1e-6, max_iter=150))
+	ac_result = run_ac_pf(network, with_optimizer(
+					opt, print_level=0, tol=1e-6, max_iter=150))
 
 	ret = Array{Any}(undef, 4)
 	ret[1] = dc_result["solution"]
 	ret[2] = ac_result["solution"]
 	ret[3] = dc_result["solve_time"]
 	ret[4] = ac_result["solve_time"]
+	# println("sample $i; ac: $(ret[4]); dc: $(ret[3])")
 	return ret
 end
 
@@ -121,13 +125,14 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		# data = FileIO.load(f)["data"]
 		# target = FileIO.load(f)["target"]
 		if log == true
-			log = open("$(case)_output_pf.log", "a")
-			println(log, "Dataset already exists in current directory.")
+			runlog = open("$(case)_output_pf.log", "a")
+			println(runlog, "Dataset already exists in current directory.")
 			# println("Total load data performance:")
-			close(log)
+			close(runlog)
 		end
 		return nothing
 	end
+	PowerModels.silence()
 	# read matpower case file
 	network_data = parse_file("$case.m")
 	load = network_data["load"]
@@ -154,11 +159,16 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		QD = FileIO.load("$(case)_pq_values.jld2")["QD"]
 	end
 
+	if log == true
+		runlog = open("$(case)_output_pf.log", "a")
+		println(runlog, "Starting parallel dcpf and acpf at $(now()).")
+		close(runlog)
+	end
+
 	# generate input and label for NN
 	# make PD, QD, network_data and numPQ accessable by all workers
 	# each worker will only read from them, or first make deep copies then write
 	# to copies to avoid race condition
-	PowerModels.silence()
 	sendto(workers(), ndata = network_data, P = PD, Q = QD, numPQ = numPQ)  # so that every worker can access this
 
 	# run dc and ac pf in parallel
@@ -204,20 +214,19 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	ac = (ac_time / (dc_time + ac_time))
 	dc_time = dc * pf_time
 	ac_time = ac * pf_time
-
 	# DC and AC computation time; will be less than the @time macro in main()
 	# since that also has other overhead like network data dict accessing
 	# only write to output.log if we're saving data, i.e. not test runs
 	if save_data == true && log == true
-		log = open("$(case)_output_pf.log", "a")
-		println(log, "Number of workers: $(nprocs()-1)")
-		println(log, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
-		println(log, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc*100.0, digits=3))%)")
-		println(log, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac*100.0, digits=3))%)")
-		println(log, "  acpf time is $(round(ac/dc, digits=3)) times longer than dcpf")
-		println(log, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
+		runlog = open("$(case)_output_pf.log", "a")
+		println(runlog, "Number of workers: $(nprocs()-1)")
+		println(runlog, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
+		println(runlog, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc*100.0, digits=3))%)")
+		println(runlog, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac*100.0, digits=3))%)")
+		println(runlog, "  acpf time is $(round(ac/dc, digits=3)) times longer than dcpf")
+		println(runlog, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
 		println("Total load data performance:")
-		close(log)
+		close(runlog)
 	end
 	# save data and target to disk
 	if save_data == true
