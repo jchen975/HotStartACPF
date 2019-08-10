@@ -4,7 +4,7 @@ default hyperparameters:
 `/path/to/julia run_train.jl <case name> -d
 custom hyperparameters (currently must be complete):
 `/path/to/julia run_train.jl <case name> <second hidden layer Y/N> <retrain Y/N>
- 	<learning rate> <epochs> <batch size>`
+ 	<learning rate> <epochs> <batch size> <train ratio>`
 TODO: accommodate vararg hyperparameter set
 """
 
@@ -12,7 +12,7 @@ using Dates, FileIO
 
 error = false
 case = ARGS[1]  # case name, is String
-if length(ARGS) != 6 && length(ARGS) != 2
+if length(ARGS) != 7 && length(ARGS) != 2
 	println("Incorrect number of arguments provided. Expected 6, received $(length(ARGS))")
 	error = true
 elseif length(ARGS) == 2 && ARGS[2] != "-d"
@@ -41,12 +41,13 @@ if error == false
 	# calculate hidden layer size(s) based on dataset feature size
 	K1 = round(Int, (size(data)[2] + size(target)[2]) / 2)
 	default_param = true
-	if length(ARGS) == 6
+	if length(ARGS) == 7
 		K2 = (ARGS[2]=="Y" || ARGS[2]=="y") ? K1 : 0  # if yes, set to same size as K1
 		retrain = (ARGS[3]=="Y" || ARGS[3]=="y") ? true : false
 		lr = parse(Float64, ARGS[4])
 		epochs = parse(Int64, ARGS[5])
 		bs = parse(Int64, ARGS[6])
+		T = parse(Float64, ARGS[7])
 		default_param = false
 	end
 	include("train.jl")
@@ -57,9 +58,9 @@ if error == false
 	# train
 	println("Training a model for $case...")
 	if default_param == true
-		@time train_net(case, data, target, K1, K2)
+		@time train_net(case, data, target, .2, K1, K1)  # K2 is same size as K1
 	else
-		@time train_net(case, data, target, K1, K2, lr, epochs, bs, retrain)
+		@time train_net(case, data, target, .2, K1, K2, lr, epochs, bs, retrain)
 	end
 	println("Program finished. Exiting...")
 end
