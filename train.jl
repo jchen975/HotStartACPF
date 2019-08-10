@@ -15,7 +15,7 @@ using Plots  # plot loss and acc curves
 
 """
 	train_net(case::String, data::Array{Float32}, target::Array{Float32},
-		K1::Int64, K2::Int64=0, lr::Float64=1e-3, epochs::Int64=30,
+		T::Float64, K1::Int64, K2::Int64=0, lr::Float64=1e-3, epochs::Int64=30,
 		batch_size::Int64=64, retrain::Bool=false)
 Train an MLP with provided dataset or load trained model. Saves trained model
 with checkpointing, as well as the loss and accuracy data in current directory.
@@ -25,6 +25,7 @@ ARGUMENTS:
 	case: matpower case file name as a string; e.g. case118
 	data, target: dataset and ground truth, must be of dimension (K, N) where N
 		= number of samples and K = number of features
+	T: a ratio of training + validation set in N samples
 	K1: a positive integer, first hidden layer size
 
 OPTIONAL ARGUMENTS:
@@ -45,8 +46,8 @@ Note that there might not be enough memory on the GPU if not running on clusters
 	work.
 """
 function train_net(case::String, data::Array{Float32}, target::Array{Float32},
-	K1::Int64, K2::Int64=0, lr::Float64=1e-3, epochs::Int64=30,
-	batch_size::Int64=64, retrain::Bool=false)
+	T::Float64, K1::Int64, K2::Int64=0, lr::Float64=1e-4, epochs::Int64=100,
+	batch_size::Int64=32, retrain::Bool=false)
 
 	# check if model is trained and does not need to be retrained
 	if isfile("$(case)_model.bson") == true && retrain == false
@@ -66,16 +67,16 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		return nothing
     end
 
-	# separate out train (70%), validation (15%) and test (15%) data
-	N = size(data)[2]
-	trainSplit = round(Int32, N*0.7)
-	valSplit = round(Int32, N*0.85)
+	# separate out training + validation (80/20) set, and N \ T for "test set"
+	N = size(data)[2] * T
+	trainSplit = round(Int32, N*0.8)
+	valSplit = round(Int32, N)
 	trainData = data[:, 1:trainSplit] |> gpu
 	trainTarget = target[:, 1:trainSplit] |> gpu
-	valData = data[:, trainSplit:valSplit] |> gpu
-	valTarget = target[:, trainSplit:valSplit] |> gpu
-	testData = data[:, valSplit:end] |> gpu
-	testTarget = target[:, valSplit:end] |> gpu
+	valData = data[:, trainSpli+1t:valSplit] |> gpu
+	valTarget = target[:, trainSplit+1:valSplit] |> gpu
+	testData = data[:, valSplit+1:end] |> gpu
+	testTarget = target[:, valSplit+1:end] |> gpu
 
 	# network model: if K2 is nonzero, there are two hidden layers, otherwise 1
 	layer1 = Dense(size(data)[1], K1, relu)  # weight matrix 1
@@ -96,7 +97,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 
 	# loss function and accuracy measure
 	loss(x, y) = Flux.mse(model(x), y)
-	accuracy(x, y) = 1 - abs.(mean(y - model(x)))
+	accuracy(x, y) = 1 - mean(abs.(y - model(x)))  # L1 norm
 
 	opt = ADAM(lr)  # ADAM optimizer
 	# opt = Momentum(lr)  # SGD with momentum
@@ -148,6 +149,8 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	log = open("$(case)_train_output.log", "a")
 	println(log, "Finished training after $elapsedEpochs epochs and $(round(
 					training_time, digits=3)) seconds")
+	println(log, "Percentage of samples used in training: $N; " *
+				"percentage of samples used in forward pass (test set)")
 	println(log, "Hyperparameters used: learning rate = $lr, "
 				* "batch_size = $batch_size, number of hidden layers = $nlayers")
 	println(log, "Test set accuracy: $(round(testAcc*100, digits=3))%")
@@ -158,7 +161,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	# save loss and accuracy data
 	save("$(case)_loss_acc_data.jld2", "trainLoss", trainLoss,
 		"trainAcc", trainAcc, "valLoss", valLoss, "valAcc", valAcc)
-	plot_results(trainLoss, trainAcc, valLoss, valAcc, case)
+	# plot_results(trainLoss, trainAcc, valLoss, valAcc, case)
 end
 
 """
