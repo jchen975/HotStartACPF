@@ -57,7 +57,7 @@ if error == false
 	# train
 	println("Training a model for $case...")
 	if default_param == true
-		@time train_net(case, data, target, K1)
+		@time train_net(case, data, target, K1, K2)
 	else
 		@time train_net(case, data, target, K1, K2, lr, epochs, bs, retrain)
 	end
