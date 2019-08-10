@@ -5,8 +5,8 @@ Correcting DC power flow results with an MLP, written entirely in Julia. Work st
 
 `train.jl` performs 1) training an MLP with provided dataset, 2) plotting results and 3) saving and loading existing model.
 
-`run_load.jl` and `run_train.jl`: run `load_data.jl` and `train.jl` on command line; bash scripts in progress.
+`run_load.jl` and `run_train.jl`: run `load_data.jl` and `train.jl` on command line; bash scripts committed but will be changed to test different parameters
 
-`hot_start_acpf.jl`: run acpf again with hot start values from dcpf + mlp inference.
+`hot_start_acpf.jl`: run acpf again with hot start values from dcpf + mlp inference. Only conducted basic tests for this file.
 
 To find the case files, please see https://github.com/MATPOWER/matpower and https://github.com/lanl-ansi/PowerModels.jl/tree/master/test/data/matpower. 
