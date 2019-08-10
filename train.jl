@@ -51,19 +51,19 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 
 	# check if model is trained and does not need to be retrained
 	if isfile("$(case)_model.bson") == true && retrain == false
-		log = open("$(case)_train_output.log", "a")
-		println(log, "Model already trained! Loading model for forward pass...")
+		trainlog = open("$(case)_train_output.log", "a")
+		println(trainlog, "Model already trained! Loading model for forward pass...")
 		start = Base.time()
 		BSON.@load "$(case)_model.bson" model
 		model |> gpu
 		data |> gpu
 		predict = model(data)
 		elapsed = Base.time() - start
-		println(log, "Loading model and forward pass took $(round(elapsed, digits=3)) seconds.")
+		println(trainlog, "Loading model and forward pass took $(round(elapsed, digits=3)) seconds.")
 		# save predict to current directory
 		save("$(case)_predict.jld2", "predict", predict)
-		println(log, "Saved predicted results to current directory as $(case)_predict.jld2")
-		close(log)
+		println(trainlog, "Saved predicted results to current directory as $(case)_predict.jld2")
+		close(trainlog)
 		return nothing
     end
 
@@ -100,7 +100,6 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	accuracy(x, y) = 1 - mean(abs.(y - model(x)))  # L1 norm
 
 	opt = ADAM(lr)  # ADAM optimizer
-	# opt = Momentum(lr)  # SGD with momentum
 
 	elapsedEpochs = 0
 	training_time = 0.0  # excludes early stop condition & checkpointing overhead
@@ -135,7 +134,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		elapsedEpochs = epoch
 
 		# checkpoint if val acc increased; to load, change @save to @load
-		if epoch > 1 && valAcc[end] > valAcc[end-1]
+		if epoch % 5 == 0 && epoch > 1 && valAcc[end] > valAcc[end-1]
 			model_checkpt = cpu(model)
 			@save "$(case)_model_ep$epoch.bson" model_checkpt  # to get weights, use Tracker.data()
 		end
@@ -144,17 +143,21 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 			break
 		end
 	end
+	time = Base.time()
 	testAcc = Tracker.data(accuracy(testData, testTarget))  # test set accuracy
+	fptime = Base.time() - time
+
 	# write result to file
-	log = open("$(case)_train_output.log", "a")
-	println(log, "Finished training after $elapsedEpochs epochs and $(round(
+	trainlog = open("$(case)_train_output.log", "a")
+	println(trainlog, "Finished training after $elapsedEpochs epochs and $(round(
 					training_time, digits=3)) seconds")
-	println(log, "Percentage of samples used in training: $N; " *
-				"percentage of samples used in forward pass (test set)")
-	println(log, "Hyperparameters used: learning rate = $lr, "
+	println(trainlog, "Hyperparameters used: learning rate = $lr, "
 				* "batch_size = $batch_size, number of hidden layers = $nlayers")
-	println(log, "Test set accuracy: $(round(testAcc*100, digits=3))%")
-	close(log)
+	println(trainlog, "Percentage of samples used in training: $N; " *
+				"percentage of samples used in forward pass (test set)")
+	println(trainlog, ">> Test set accuracy: $(round(testAcc*100, digits=3))%, "
+				* "forward pass took $(round(fptime, digits=3)) seconds")
+	close(trainlog)
 	# save final model
 	model = cpu(model)
 	@save "$(case)_model.bson" model  # to get weights, use Tracker.data()
