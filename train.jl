@@ -97,7 +97,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 
 	# loss function and accuracy measure
 	loss(x, y) = Flux.mse(model(x), y)
-	accuracy(x, y) = 1 - mean(abs.(y - model(x)))  # L1 norm
+	accuracy(x, y) = 1 - mean(abs.(y - model(x)) ./ y)  # mean abs error as percentage
 
 	opt = ADAM(lr)  # ADAM optimizer
 
