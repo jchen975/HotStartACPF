@@ -68,12 +68,12 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
     end
 
 	# separate out training + validation (80/20) set, and N \ T for "test set"
-	N = size(data)[2]
-	trainSplit = round(Int32, N * T * 0.8)
-	valSplit = round(Int32, N * T)
+	N = size(data)[2] * T
+	trainSplit = round(Int32, N*0.8)
+	valSplit = round(Int32, N)
 	trainData = data[:, 1:trainSplit] |> gpu
 	trainTarget = target[:, 1:trainSplit] |> gpu
-	valData = data[:, trainSplit+1:valSplit] |> gpu
+	valData = data[:, trainSpli+1t:valSplit] |> gpu
 	valTarget = target[:, trainSplit+1:valSplit] |> gpu
 	testData = data[:, valSplit+1:end] |> gpu
 	testTarget = target[:, valSplit+1:end] |> gpu
@@ -105,16 +105,16 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	training_time = 0.0  # excludes early stop condition & checkpointing overhead
 
 	# train with mini batches; if batch_size = 0, train with full batch
-	randIdx = collect(1:1:trainSplit)
+	randIdx = collect(1:1:size(trainData)[2])
 	if batch_size > 0
-		numBatches = round(Int, floor(trainSplit / batch_size - 1))
+		numBatches = round(Int, floor(size(trainData)[2] / batch_size - 1))
 	else
 		numBatches = 1
-		batch_size = trainSplit - 1
+		batch_size = size(trainData)[2] - 1
     end
 	for epoch = 1:epochs
 		time = Base.time()
-		# println("epoch: $epoch")
+		println("epoch: $epoch")
 		Random.shuffle!(randIdx) # to shuffle training set
 		i = 1
 		for j = 1:numBatches
@@ -150,14 +150,13 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	# write result to file
 	trainlog = open("$(case)_train_output.log", "a")
 	println(trainlog, "Finished training after $elapsedEpochs epochs and $(round(
-			training_time, digits=3)) seconds")
+					training_time, digits=3)) seconds")
 	println(trainlog, "Hyperparameters used: learning rate = $lr, "
-			* "batch_size = $batch_size, number of hidden layers = $nlayers")
-	println(trainlog, "Total samples in dataset: $N")
-	println(trainlog, "  => Percentage of training + validation samples: $(T*100)%")
-	println(trainlog, "  => Percentage of test set samples (forward pass): $((1-T)*100)%")
-	println(trainlog, "     Test set accuracy: $(round(testAcc*100, digits=3))%, "
-			* "forward pass took $(round(fptime, digits=4)) seconds")
+				* "batch_size = $batch_size, number of hidden layers = $nlayers")
+	println(trainlog, "Percentage of samples used in training: $N; " *
+				"percentage of samples used in forward pass (test set)")
+	println(trainlog, ">> Test set accuracy: $(round(testAcc*100, digits=3))%, "
+				* "forward pass took $(round(fptime, digits=3)) seconds")
 	close(trainlog)
 	# save final model
 	model = cpu(model)
@@ -166,7 +165,6 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	save("$(case)_loss_acc_data.jld2", "trainLoss", trainLoss,
 		"trainAcc", trainAcc, "valLoss", valLoss, "valAcc", valAcc)
 	# plot_results(trainLoss, trainAcc, valLoss, valAcc, case)
-	println("Total training performance:")
 end
 
 """

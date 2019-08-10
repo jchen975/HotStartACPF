@@ -30,7 +30,6 @@ if error == false
 	# load dataset from local directory
 	data = FileIO.load("$(case)_pf_results.jld2")["data"]
 	target = FileIO.load("$(case)_pf_results.jld2")["target"]
-	println("Dataset loaded at $(now())")
 	# Float32 should decrease memory allocation demand and run much faster on
 	# non professional GPUs
 	if typeof(data) != Array{Float32, 2}
@@ -57,11 +56,11 @@ if error == false
 	println(log, now())
 	close(log)
 	# train
-	println("Training a model for $case at $(now())...")
+	println("Training a model for $case...")
 	if default_param == true
 		@time train_net(case, data, target, .2, K1, K1)  # K2 is same size as K1
 	else
 		@time train_net(case, data, target, .2, K1, K2, lr, epochs, bs, retrain)
 	end
-	println("Program finished at $(now()). Exiting...")
+	println("Program finished. Exiting...")
 end
