@@ -5,14 +5,16 @@ echo "------------------------------------------------------------------------" 
 echo >> run_train.log
 echo "************ Starting program: $(date) ************" >> run_train.log
 echo ">> CPU Info" >> run_train.log
-lscpu | grep -i "Model name" >> run_train.log  # print computer info to log file
+lscpu | grep -v "Model name" >> run_train.log  # print computer info to log file
 echo >> run_train.log
 echo ">> GPU Info" >> run_train.log
-nvidia-smi --query-gpu=name,memory.total --format=csv | grep -i "Tesla" >> run_train.log
+nvidia-smi --query-gpu=name,memory.total --format=csv | grep -v "name" >> run_train.log
 echo >> run_train.log
 echo "------------------------------------------------------------------------" >> run_train.log
 
 module load gcc/7.3.0 julia/1.1.1 cuda/10.0.130 cudnn/7.5 # enable julia, CUDA
+
+nvidia-smi --query-gpu=memory.used --format=csv -l 30 | grep -v "memory" >> run_train.log
 
 # From run_train.jl:
 # Running on command line (assuming train.jl is in current directory):
