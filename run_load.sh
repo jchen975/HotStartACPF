@@ -5,7 +5,7 @@ echo "------------------------------------------------------------------------" 
 echo >> run_load.log
 echo "************ Starting program: $(date) ************" >> run_load.log
 echo "CPU Info" >> run_load.log
-lscpu | grep -i "Model name" >> run_load.log  # print computer info to log file
+lscpu | grep "Model name:" | sed -r 's/Model name:\s{1,}//g'  >> run_load.log
 echo >> run_load.log
 echo "------------------------------------------------------------------------" >> run_load.log
 
@@ -16,8 +16,8 @@ module load gcc/7.3.0 julia/1.1.1  # enable julia
 # julia run_load.jl <case name> <number of samples> <number of workers> <force generating new dataset Y/N>
 
 N=10000
-nprocs=30
-casefiles=("case30" "case118" "case300" "case2869" "case13659")
+nprocs=40
+casefiles=("case30" "case118" "case300" "case2869")# "case13659")
 
 for case in ${casefiles[*]}
 do
