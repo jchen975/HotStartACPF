@@ -1,4 +1,4 @@
-using Distributions
+using Distributions, Random
 using Distributions: Random
 using JLD2, FileIO
 
@@ -15,40 +15,37 @@ const REF_BUS = 3
 Parallel power flow computation
 After creating the P, Q matrices and parsing a matpower case file, compute
 DC and AC power flow in parallel as follows:
-	1. Pass P, Q, network_data to all worker processes
-	2. Using `pmap()` and its argument `i`, each worker process will first make a
-		deep copy of `network_data` dictionary, and then use the i-th column of
-		P, Q to update the `pd`, `qd` fields for all loads in `network_data`. Each
-		worker process will then use the `run_dc_pf` and `run_ac_pf` functions in
-		PowerModels to compute the DC and AC power flow results. Finally, each
-		worker returns the DC, AC power flow solutions and solution times as an
-		array of type Any, with the first two element being the solutions
-		dictionary and the last two being the solution times as Floats.
-	3. This will not cause race conditions as only the i-th column of P, Q are
-		accessed by each worker, and no worker process will access it twice.
-		No worker process writes to the shared P, Q matrices, and only writes
-		to the deep copied network_data, which is an overhead.
+1. Pass P, Q, `network_data` to all worker processes
+2. Using `pmap()` and its argument `i`, each worker process will first make a
+	deep copy of `network_data` dictionary, and then use the i-th column of
+	P, Q to update the `pd`, `qd` fields for all loads in `network_data`. Each
+	worker process will then use the `run_dc_pf` and `run_ac_pf` functions in
+	PowerModels to compute the DC and AC power flow results. Finally, each
+	worker returns the DC, AC power flow solutions and solution times as an
+	array of type Any, with the first two element being the solutions
+	dictionary and the last two being the solution times as Floats.
+3. This will not cause race conditions as only the i-th column of P, Q are
+	accessed by each worker, and no worker process will access it twice.
+	No worker process writes to the shared P, Q matrices, and only writes
+	to the deep copied network_data, which is an overhead.
 Several notes:
-	1. `@everywhere` macro must be placed before all function definitions and
-		`using` statements if they are shared by workers
-	2. `addprocs()`` must be called before all @everywhere instances
+1. `@everywhere` macro must be placed before all function definitions and
+	`using` statements if they are shared by workers
+2. `addprocs()`` must be called before all @everywhere instances
 """
 # not sure why but if there's no empty line between """ and @everwhere
 # docstring breaks
 @everywhere function compute_pf(i::Int64)
-	# println(i)  # uncomment this if you want to see which worker is executing what
 	network = deepcopy(ndata)  # we need to write to network dict so make copy
 	for j = 1:numPQ
 		network["load"][string(j)]["pd"] = P[j, i]
 		network["load"][string(j)]["qd"] = Q[j, i]
 	end
 	PowerModels.silence()
-	opt = Ipopt.Optimizer
-
 	dc_result = run_dc_pf(network, with_optimizer(
-					opt, print_level=0, tol=1e-6, max_iter=150))
+					Ipopt.Optimizer, print_level=0, tol=1e-6, max_iter=150))
 	ac_result = run_ac_pf(network, with_optimizer(
-					opt, print_level=0, tol=1e-6, max_iter=150))
+					Ipopt.Optimizer, print_level=0, tol=1e-6, max_iter=150))
 
 	ret = Array{Any}(undef, 4)
 	ret[1] = dc_result["solution"]
@@ -64,25 +61,24 @@ Load demand variations based on Zhen Dai's paper; NY parameters
 
 TODO: add variations for PV buses: P and Vm
 """
-function get_PQ_variation(PD::Array{Float64}, baseMVA::Float64, N::Int64)
-	Random.seed!(521) # random seed for reproducible outputs
-	numPQ = length(PD)
-	P̄ = mean(PD) * baseMVA
+function get_PQ_variation(busPD::Array{Float64}, N::Int64)
 	α0 = 5.44130
 	α1 = 0.17459
 	α2 = 0.001673
-	σP = α0 + α1*sqrt(P̄) + α2*P̄
-
-	# Generate N (ΔPD, power factor(0.7~1.0 lagging)) independently Gaussian RVs
-	# for load bus PQ variations; Q = tan(acos(power factor)) * P
-	PD = rand(Normal(P̄, σP), N*numPQ) ./ baseMVA
-	pf = rand(TruncatedNormal(0.85, 0.1, 0.7, 1.0), N*numPQ)
-	QD = PD .* tan.(acos.(pf))
-
-	# reshape variations above from 1D vec to numPQ x N, and change all
-	# negative values to 0
- 	PD = max.(reshape(PD, numPQ, :), 0)
-	QD = max.(reshape(QD, numPQ, :), 0)
+	Random.seed!(521)
+	numPQ = length(busPD)
+	PD, QD = zeros(numPQ, N), zeros(numPQ, N)
+	pf = rand(TruncatedNormal(1, 0.05, 0.7, 1.0), numPQ)  # power factor distribution
+	for i = 1:numPQ
+		perm = randperm(N)  # permutation index
+		σP = α0 + α1*sqrt(abs(busPD[i])) + α2*abs(busPD[i])  # even with negative load, std is the same
+		PD[i, :] = (rand(Normal(busPD[i], σP), N))[perm]
+	   	QD[i, :] = (PD[i, :] .* tan.(acos.(pf[perm])))[perm]
+		# if busPD[i] > 0  # only limit to postive values if og val is positive
+		# 	PD[i, :] = max.(PD[i, :], 0)
+		# 	QD[i, :] = max.(QD[i, :], 0)
+		# end
+	end
 	return PD, QD
 end
 
@@ -137,20 +133,22 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	network_data = parse_file("$case.m")
 	load = network_data["load"]
 	baseMVA = float(network_data["baseMVA"])  # cast as Float64
-	numPQ = length(load) # since load dictionary ignores 0 entries, its size <= length(bus)
+	numPQ = length(load) # load dictionary ignores 0 entries ∴ numPQ <= length(bus)
 
 	# first col is loadIdx, second is its corresponding bus idx
 	# ordered by loadIdx
 	loadToBusIdx = hcat(collect(Int64, 1:1:numPQ), zeros(Int64, numPQ))
-	PD = zeros(numPQ)
+	busPD = zeros(numPQ)
 	for i = 1:numPQ
-		PD[i] = load[string(i)]["pd"]
+		busPD[i] = load[string(i)]["pd"] * baseMVA
 		loadToBusIdx[i, 2] = load[string(i)]["load_bus"] # record corresponding bus number
 	end
 
 	# calculate PD, QD variations if haven't done so already
 	if isfile("$(case)_pq_values.jld2") == false
-		PD, QD = get_PQ_variation(PD, baseMVA, N)
+		PD, QD = get_PQ_variation(busPD, N)
+		PD = PD ./ baseMVA  # back to per unit
+		QD = QD ./ baseMVA
 		if save_data == true
 			save("$(case)_pq_values.jld2", "PD", PD, "QD", QD)
 		end
