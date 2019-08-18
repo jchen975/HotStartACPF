@@ -51,14 +51,14 @@ Several notes:
 	ret[2] = ac_result["solution"]
 	ret[3] = dc_result["solve_time"]
 	ret[4] = ac_result["solve_time"]
-	println("sample $i; ac: $(ret[4]); dc: $(ret[3])")
+	# println("sample $i; ac: $(ret[4]); dc: $(ret[3])")
 	return ret
 end
 
 """
 Load demand variations based on Zhen Dai's paper; NY parameters
 
-TODO: add variations for PV buses: P and Vm
+TODO: add variations for PV buses: P and Vm (low priority)
 """
 function get_PQ_variation(busPD::Array{Float64}, N::Int64, numPQ::Int64)
 	α0 = 5.44130
@@ -205,7 +205,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		dc_time += ret[i][3]
 		ac_time += ret[i][4]
 	end
-	data = vcat(PD, QD, VM_dc, VA_dc)
+	data = vcat(VM_dc, VA_dc, PD, QD)
 	target = vcat(VM_ac, VA_ac)
 	reduce_time = Base.time() - time
 
@@ -287,4 +287,4 @@ end
 
 # ARGS only available if arguments are given on command line; so if runnning in
 # REPL, comment this out, and call `main(["array" "of" "strings"])`
-# main(ARGS)
+main(ARGS)
