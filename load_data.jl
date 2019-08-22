@@ -1,8 +1,9 @@
 using Distributions, Random
 using JLD2, FileIO, Dates
-using Distributed
+# using Distributed
 @everywhere using ParallelDataTransfer
 @everywhere using PowerModels, JuMP, Ipopt # powerl flow packages
+@everywhere PowerModels.silence()  # don't print anything from PM
 
 # bus type; PV, and REF not used yet
 const PQ_BUS = 1
@@ -40,24 +41,21 @@ Several notes:
 		network["load"][string(j)]["pd"] = P[j, i]
 		network["load"][string(j)]["qd"] = Q[j, i]
 	end
-	PowerModels.silence()
-	dc_result = run_dc_pf(network, with_optimizer(
-					Ipopt.Optimizer, print_level=0, tol=1e-6, max_iter=150))
+	# PowerModels.silence()
+	dc_result = run_dc_pf(network, with_optimizer(Ipopt.Optimizer, print_level=0))
 	ac_result = run_ac_pf(network, with_optimizer(
-					Ipopt.Optimizer, print_level=0, tol=1e-6, max_iter=150))
+					Ipopt.Optimizer, print_level=3, tol=1e-6, max_iter=300))
 
 	ret = Array{Any}(undef, 4)
 	ret[1] = dc_result["solution"]
 	ret[2] = ac_result["solution"]
 	ret[3] = dc_result["solve_time"]
 	ret[4] = ac_result["solve_time"]
-	# println("sample $i; ac: $(ret[4]); dc: $(ret[3])")
 	return ret
 end
 
 """
 Load demand variations based on Zhen Dai's paper; NY parameters
-
 TODO: add variations for PV buses: P and Vm (low priority)
 """
 function get_PQ_variation(busPD::Array{Float64}, N::Int64, numPQ::Int64)
@@ -121,20 +119,19 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 		# data = FileIO.load(f)["data"]
 		# target = FileIO.load(f)["target"]
 		if log == true
-			runlog = open("$(case)_pf_output_w$(nprocs()-1).log", "a")
+			runlog = open("$(case)_pf_output_w$(nworkers()).log", "a")
 			println(runlog, "Dataset already exists in current directory.")
-			# println("Total load data performance:")
 			close(runlog)
 		end
 		return nothing
 	end
-	time = Base.time()
-	PowerModels.silence()
 
-	# read matpower case file, solve the base case acpf and overwrite existing
+	# time = Base.time()  # records setting up parallel pf overhead
+	PowerModels.silence()
+	# read matpower case file, solve the base case acpf and overwrite the existing
 	network_data = parse_file("$case.m")
 	sol = run_ac_pf(network_data, with_optimizer(Ipopt.Optimizer,
-					print_level=0, tol=1e-6, max_iter=150))["solution"]["bus"]
+					print_level=0, tol=1e-6, max_iter=300))["solution"]["bus"]
 	for b in sol  # b[1] = bus index Int, b[2] = solved values as dict
 		network_data["bus"][string(b[1])]["vm"] = b[2]["vm"]
 		network_data["bus"][string(b[1])]["va"] = b[2]["va"]
@@ -149,26 +146,28 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	loadToBusIdx = hcat(collect(Int64, 1:1:numPQ), zeros(Int64, numPQ))
 	busPD = zeros(numPQ)
 	for i = 1:numPQ
-		busPD[i] = load[string(i)]["pd"] * baseMVA
+		busPD[i] = load[string(i)]["pd"]
 		loadToBusIdx[i, 2] = load[string(i)]["load_bus"] # record corresponding bus number
 	end
 
 	# calculate PD, QD variations if haven't done so already
-	if isfile("$(case)_pq_values.jld2") == false
-		PD, QD = get_PQ_variation(busPD, N, numPQ)
+	if isfile("$(case)_pq_values.jld2") == false || reload == true
+		PD, QD = get_PQ_variation((busPD*baseMVA), N, numPQ)
 		PD = PD ./ baseMVA  # back to per unit
 		QD = QD ./ baseMVA
 		if save_data == true
 			save("$(case)_pq_values.jld2", "PD", PD, "QD", QD)
 		end
-	else
+	elseif reload == false
 		PD = FileIO.load("$(case)_pq_values.jld2")["PD"]
 		QD = FileIO.load("$(case)_pq_values.jld2")["QD"]
 	end
 
 	if log == true
-		runlog = open("$(case)_pf_output_w$(nprocs()-1).log", "a")
+		runlog = open("$(case)_pf_output_w$(nworkers()).log", "w")
+		println(runlog, "##### $case ######")
 		println(runlog, "Starting parallel dcpf and acpf at $(now())...")
+		println(runlog, "Number of workers = $(nworkers()) Samples = $N")
 		close(runlog)
 	end
 
@@ -176,6 +175,7 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# make PD, QD, network_data and numPQ accessable by all workers
 	# each worker will only read from them, or first make deep copies then write
 	# to copies to avoid race condition
+	time = Base.time()  # records setting up parallel pf overhead
 	sendto(workers(), ndata = network_data, P = PD, Q = QD, numPQ = numPQ)  # so that every worker can access this
 	setup_time = Base.time() - time  # setting up overhead
 
@@ -195,23 +195,26 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 
 	# reduce
 	time = Base.time()
-	dc_time, ac_time = .0, .0
+	dc_time_arr, ac_time_arr = zeros(N), zeros(N)
 	for i = 1:N
 		for k = 1:numPQ
+			# ordered by load #, needs to reverse look up bus number
 			VM_ac[k, i] = ret[i][2]["bus"][string(loadToBusIdx[k, 2])]["vm"]
 			VA_ac[k, i] = ret[i][2]["bus"][string(loadToBusIdx[k, 2])]["va"]
 			VA_dc[k, i] = ret[i][1]["bus"][string(loadToBusIdx[k, 2])]["va"]
 		end
-		dc_time += ret[i][3]
-		ac_time += ret[i][4]
+		dc_time_arr[i] = ret[i][3]
+		ac_time_arr[i] = ret[i][4]
 	end
-	data = vcat(VM_dc, VA_dc, PD, QD)
-	target = vcat(VM_ac, VA_ac)
+	data = vcat(VA_dc, VM_dc, PD, QD)
+	target = vcat(VA_ac, VM_ac)
 	reduce_time = Base.time() - time
 
 	# currently dc_time and ac_time are both *actual* times, i.e. there are
 	# overlaps between workers due to parallel execution; the ratio however is
 	# true, so normalize it down with total parallel pf time
+	dc_time = sum(dc_time_arr)
+	ac_time = sum(ac_time_arr)
 	dc = (dc_time / (dc_time + ac_time))
 	ac = (ac_time / (dc_time + ac_time))
 	dc_time = dc * pf_time
@@ -221,13 +224,14 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	# since that also has other overhead like network data dict accessing
 	# only write to output.log if we're saving data, i.e. not test runs
 	if save_data == true && log == true
-		runlog = open("$(case)_pf_output_w$(nprocs()-1).log", "a")
-		println(runlog, "Setting up pf time: $(round(setup_time, digits=3)) seconds")
-		println(runlog, "Extracting results time: $(round(reduce_time, digits=3)) seconds")
+		runlog = open("$(case)_pf_output_w$(nworkers()).log", "a")
+		println(runlog, "Setting up pf time: $(round(setup_time, digits=4)) seconds")
+		println(runlog, "Extracting results time: $(round(reduce_time, digits=4)) seconds")
 		println(runlog, "Total power flow computation time: $(round(pf_time, digits=3)) seconds")
-		println(runlog, "  => dcpf: $(round(dc_time, digits=3)) seconds ($(round(dc*100.0, digits=3))%)")
-		println(runlog, "  => acpf: $(round(ac_time, digits=3)) seconds ($(round(ac*100.0, digits=3))%)"
-					* ". Average time per acpf: $(round(ac_time/N, digits=3)) seconds")
+		println(runlog, "  => dcpf: $(round(dc_time, digits=4)) seconds ($(round(dc*100.0, digits=3))%)"
+					* ". Average time per acpf: $(round(dc_time/N, digits=4)) seconds")
+		println(runlog, "  => acpf: $(round(ac_time, digits=4)) seconds ($(round(ac*100.0, digits=3))%)"
+					* ". Average time per acpf: $(round(ac_time/N, digits=4)) seconds")
 		println(runlog, "  acpf time is $(round(ac/dc, digits=3)) times longer than dcpf")
 		println(runlog, "")  # new line
 		close(runlog)
@@ -237,7 +241,6 @@ function load_data(case::String, N::Int64, save_data::Bool=false,
 	if save_data == true
 		save("$(case)_pf_results.jld2", "data", data, "target", target)
 	end
-	println("Total load data performance:")
 	## Uncomment if running in REPL and calling train_net next
 	# return data, target
 	return nothing
@@ -262,29 +265,29 @@ function main(args::Array{String})
 
 	if error == false
 		N = parse(Int64, args[2])  # number of samples, is Int
-		reload = (args[3]=="Y" || args[3]=="y") ? true : false
-		println("***Program started at $(now())***")  # prints to run_load.log, not case.log
-		# record current time stamp at the start of log; overwrite existing file's content
-		runlog = open("$(case)_pf_output_w$(nprocs()-1).log", "a")
-		println(runlog, now())
-		println(runlog, "Running load_data for $case, $N samples, with $(length(workers())) workers at $(now())")
-		if reload == true
-			println(runlog, "Force generating a new dataset even if one exists.")
-		end
-		close(runlog)
+		is_official = (args[3]=="Y" || args[3]=="y") ? true : false  # whether this is warm up run
 
-		for i = 1:2   # precompilation run
-			load_data(case, 10)
-			println("Warm up $i successeful at $(now())")
+		# record current time stamp at the start of log; overwrite existing file's content
+		if is_official == true
+			println("Program started at $(now())...")  # prints to run_load.log, not case.log
+			runlog = open("$(case)_pf_output_w$(nworkers()).log", "w")
+			println(runlog, "Running load_data for $case, $N samples, with $(length(workers())) workers at $(now())")
+			println(runlog, "Force generating a new dataset even if one exists.")
+			close(runlog)
 		end
-		println("Finished warming up at $(now())")
-		println("Starting $case data generation of $N samples with $(length(workers())) workers...")
-		@time load_data(case, N, true, true, reload)  # full set and save outputs to file
-		println("Program finished at $(now()). Exiting...")
-		println("")  # new line
+
+		load_data(case, N, is_official, is_official, is_official)  # full set and save outputs to file
+		if is_official == true
+			println("Program finished at $(now()). Exiting...")
+			println("")  # new line
+		end
 	end
 end
 
 # ARGS only available if arguments are given on command line; so if runnning in
 # REPL, comment this out, and call `main(["array" "of" "strings"])`
-main(ARGS)
+t = Base.time()
+main(vcat(ARGS[1], "20", "N"))  # test run, warming up sendto() with 20 samples
+println("Warm up run finished after $(round(Base.time() - t, digits=3)) seconds")
+
+main(ARGS)  # official run with full samples
