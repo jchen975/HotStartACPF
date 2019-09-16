@@ -1,8 +1,7 @@
 
 *.log
-*.m
+*.mat
+case*.m
 *.jld2
 *.bson
 *.png
-case_general_parallel.jl
-case_general_parallel.jl

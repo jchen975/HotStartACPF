@@ -19,7 +19,7 @@ module load gcc/7.3.0 julia/1.1.1 cuda/10.0.130 cudnn/7.5 # enable julia, CUDA
 # julia run_train.jl <case name> <second hidden layer Y/N> <retrain Y/N> <learning rate> <epochs> <batch size>`
 # julia run_train.jl <case name> -d
 
-casefiles=("case30" "case118" "case300" "case2869") # "case13659")
+casefiles=("case30" "case118" "case300" "case2869")
 
 for case in ${casefiles[*]}
 do
