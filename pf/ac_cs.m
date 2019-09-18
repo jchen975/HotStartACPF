@@ -13,7 +13,7 @@ function [V_M, V_A, itr_et, itr_n, fail] = ac_cs(str, P, Q, DCVM, DCVA)
     fail = [];  % should preallocate for perf, but ret.et is the NR time so I don't care
     
     % run acpf numSample times
-    mpopt = mpoption('out.all', 0, 'verbose', 1, 'pf.nr.max_it', 30);
+    mpopt = mpoption('out.all', 0, 'verbose', 0);  % verbose = 2 if want to print max P,Q mismatch
     for i = 1:numSample
         if mod(i, 1000) == 0
             fprintf(' >> acpf cold start iteration %d\n', i);
@@ -31,7 +31,7 @@ function [V_M, V_A, itr_et, itr_n, fail] = ac_cs(str, P, Q, DCVM, DCVA)
         end
     end
     if length(fail) > 0
-        fprintf(' Number of failed samples: %i\n', length(fail);
+        fprintf(' Number of failed samples: %i\n', length(fail));
     end
     assert(size(P, 2) == numSample && size(Q, 2) == numSample && size(V_M, 2) == numSample && size(V_A, 2) == numSample);
     assert(length(itr_et) == numSample && length(itr_n) == numSample);
