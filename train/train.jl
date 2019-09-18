@@ -18,7 +18,7 @@ CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Va
 
 """
 	train_net(case::String, data::Array{Float32}, target::Array{Float32},
-			T::Float64, λ::Float64, K1::Int64, lr::Float64=1e-4, epochs::Int64=100,
+			T::Float64, λ::Float64, K1::Int64, lr::Float64=1e-3, epochs::Int64=100,
 			batch_size::Int64=64, retrain::Bool=false)
 Train an MLP with provided dataset or load trained model. Saves trained model
 with checkpointing, as well as the loss and accuracy data in current directory.
@@ -47,7 +47,7 @@ Note that there might not be enough memory on the GPU if not running on clusters
 	work.
 """
 function train_net(case::String, data::Array{Float32}, target::Array{Float32},
-			T::Float64, λ::Float64, K1::Int64, lr::Float64=1e-4, epochs::Int64=100,
+			T::Float64, λ::Float64, K1::Int64, lr::Float64=1e-3, epochs::Int64=100,
 			batch_size::Int64=64, retrain::Bool=false)
 	# separate out training + validation (80/20) set, and N \ T for "test set"
 	# also get the start and end indices of VA
@@ -284,5 +284,5 @@ function main(args::Array{String})
 	println("Program finished at $(now()). Exiting...")
 end
 
-# main(ARGS)
-main(["case30", "0.2", "5.0"])
+main(ARGS)
+# main(["case30", "0.2", "5.0"])
