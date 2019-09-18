@@ -1,4 +1,4 @@
-function [V_M, V_A, itr_et, itr_n, fail] = acpf_cs(str, P, Q, DCVM, DCVA)
+function [V_M, V_A, itr_et, itr_n, fail] = ac_cs(str, P, Q, DCVM, DCVA)
     define_constants;
     mpc = loadcase(str);
     
