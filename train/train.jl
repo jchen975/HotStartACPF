@@ -208,8 +208,8 @@ function main(args::Array{String})
 	if length(args) != 7 && length(args) != 3
 		println("Incorrect number of arguments provided. Expected 3 or 7, received $(length(args))")
 		error = true
-	elseif isfile("$(case)_data.mat") == false || isfile("$(case)_target.mat") == false
-		println("$case data or target not found in current directory. Exiting...")
+	elseif isfile("$(case)_dataset.mat") == false
+		println("$case dataset not found in current directory. Exiting...")
 		error = true
 	end
 
@@ -217,8 +217,8 @@ function main(args::Array{String})
 		return Nothing
 	end
 	# load dataset from local directory
-	data = matread("$(case)_data.mat")["data"]
-	target = matread("$(case)_target.mat")["target"]
+	data = matread("$(case)_dataset.mat")["data"]
+	target = matread("$(case)_dataset.mat")["target"]
 	println("Dataset loaded at $(now())")
 
 	# Float32 should decrease memory allocation demand and run much faster on
@@ -248,14 +248,18 @@ function main(args::Array{String})
 			(default_param == true || retrain == false)
 		trainlog = open("$(case)_train_output.log", "a")
 		println(trainlog, "Model already trained! Performing forward pass...")
+
 		# load model to GPU
 		@load "$(case)_model_$(T)T_$(λ)λ.bson" model
 		model = model |> gpu
 		data = data[:, round(Int, T*size(data)[2])+1:end] |> gpu  # take N \ T for forward pass
+
 		t = time()
 		predict = model(data)
 		println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
 				"$(round(time() - t, digits=5)) seconds")
+
+		# save predicted vm, va and the corresponding P, Q
 		vSplit = Int(size(data)[1] / 2)  # vSplit+1:end = index range of P, Q features
 		predict = cpu(Tracker.data(predict))
 		data = cpu(data[vSplit+1:end, :])
@@ -265,7 +269,7 @@ function main(args::Array{String})
 			"lambda" => λ,
 			"vpredict" => predict,
 			"pq" => data
-		))  # save predicted
+		))
 		close(trainlog)
 		println("Program finished at $(now()). Exiting...")
 		return nothing
@@ -284,5 +288,5 @@ function main(args::Array{String})
 	println("Program finished at $(now()). Exiting...")
 end
 
-main(ARGS)
+# main(ARGS)
 # main(["case30", "0.2", "5.0"])
