@@ -2,16 +2,18 @@ function [V_M, V_A, itr_et, fail] = dc(str, P, Q)
     define_constants;
     mpc = loadcase(str);
     
+    numSample = size(P, 2);
     V_M = ones(size(P), 'single');  % equivalent of Julia Float32
     V_A = zeros(size(P), 'single');
     
-    numSample = size(P, 2);
+    % Keep PV buses VM values as is
+    gen_idx = find(mpc.bus(:, BUS_TYPE) == PV);
+    V_M(gen_idx, :) = repmat(mpc.bus(gen_idx, VM), 1, numSample);
+    
     itr_et = zeros(numSample, 1);  % iteration elapsed time
+    fail = []; % arr for i-th failed dcpf (should be empty)
     
-    % arr for i-th failed dcpf
-    fail = []; 
-    
-    % run acpf numSample times
+    % run dcpf numSample times
     mpopt = mpoption('out.all', 0, 'verbose', 0);
     for i = 1:numSample
         if mod(i, 1000) == 0
