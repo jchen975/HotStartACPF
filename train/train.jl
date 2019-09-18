@@ -7,9 +7,9 @@ We assume there is CUDA hardware; if error(s) are reported, comment it out and
 using CuArrays, Flux  # GPU, ML libraries
 using Flux.Optimise: ADAM
 using Statistics # to use mean()
-using Random  # shuffling for mini batch; not setting a randome seed here
-using JLD2, BSON, FileIO  # saving and loading files
-using BSON: @save
+using Random  # shuffling for mini batch; not setting a random seed here
+using BSON, MAT  # saving and loading files
+using BSON: @save, @load
 using Dates
 
 # Fix culiteral_pow() error; check later to see if it is merged
@@ -18,8 +18,8 @@ CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Va
 
 """
 	train_net(case::String, data::Array{Float32}, target::Array{Float32},
-				T::Float64, K1::Int64, lr::Float64=1e-4, epochs::Int64=100,
-				batch_size::Int64=32, λ::Float32=2.0, retrain::Bool=false)
+			T::Float64, λ::Float64, K1::Int64, lr::Float64=1e-4, epochs::Int64=100,
+			batch_size::Int64=64, retrain::Bool=false)
 Train an MLP with provided dataset or load trained model. Saves trained model
 with checkpointing, as well as the loss and accuracy data in current directory.
 
@@ -47,23 +47,15 @@ Note that there might not be enough memory on the GPU if not running on clusters
 	work.
 """
 function train_net(case::String, data::Array{Float32}, target::Array{Float32},
-			T::Float64, K1::Int64, lr::Float64=1e-4, epochs::Int64=100,
-			batch_size::Int64=32, λ::Float32=2.0, retrain::Bool=false)
-
-	# check if model is trained and does not need to be retrained
-	if isfile("$(case)_model.bson") == true && retrain == false
-		trainlog = open("$(case)_train_output.log", "a")
-		println(trainlog, "Model already trained! Run hot start acpf Instead.")
-		close(trainlog)
-		return nothing
-    end
-
+			T::Float64, λ::Float64, K1::Int64, lr::Float64=1e-4, epochs::Int64=100,
+			batch_size::Int64=64, retrain::Bool=false)
 	# separate out training + validation (80/20) set, and N \ T for "test set"
 	# also get the start and end indices of VA
 	L, N = size(data)  # L = numPQ * 4, N = num samples
 	vaSplit = Int(L/4)  # will always be int, so no need to call round()
 	trainSplit = round(Int32, N * T * 0.8)
 	valSplit = round(Int32, N * T)
+
 	trainData = data[:, 1:trainSplit] |> gpu
 	trainTarget = target[:, 1:trainSplit] |> gpu
 	valData = data[:, trainSplit+1:valSplit] |> gpu
@@ -112,7 +104,6 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	for epoch = 1:epochs
 		time = Base.time()
 		# println("epoch: $epoch")
-
 		# record validation set loss/err values of current epoch
 		# before training so that we know the val loss/err in the beginning
 		push!(valLoss, Tracker.data(loss(valData, valTarget)))
@@ -125,18 +116,19 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 			batchTarget = trainTarget[:, randIdx[i:i+batch_size]]
 			Flux.train!(loss, Flux.params(model), [(batchData, batchTarget)], opt)
 			# record train set loss/err every mini-batch
-			push!(trainLoss, Tracker.data(loss(batchData, batchTarget))
-			push!(trainErr, Tracker.data(ϵ(batchData, batchTarget))
+			push!(trainLoss, Tracker.data(loss(batchData, batchTarget)))
+			push!(trainErr, Tracker.data(ϵ(batchData, batchTarget)))
 			i += batch_size
 		end
 		training_time += Base.time() - time
 		elapsedEpochs = epoch
 
-		# checkpoint if val err decreased; to load, change @save to @load
-		if epoch % 5 == 0 && epoch > 1 && valErr[end] < valErr[end-1]
-			model_checkpt = cpu(model)
-			@save "$(case)_model_ep$epoch.bson" model_checkpt  # to get weights, use Tracker.data()
-		end
+		# # checkpoint if val err decreased; to load, change @save to @load
+		# if epoch % 5 == 0 && epoch > 1 && valErr[end] < valErr[end-1]
+		# 	model_checkpt = cpu(model)
+		# 	@save "$(case)_model_$(T)T_$(λ)λ_ep$epoch.bson" model_checkpt  # to get weights, use Tracker.data()
+		# end
+
 		# early exit condition on val loss
 		if length(valLoss) > 1 && valLoss[end] > valLoss[end-1]
 			push!(earlyStopInd, 1)
@@ -145,40 +137,55 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 				break
 			end
 		else
-			push!(earlyStopInd, 0)  # indicates val loss decreased, good
+			push!(earlyStopInd, 0)  # indicates val loss decreased
+			# another early stop condition: val err decreased by more than 98%
+			# if ((Tracker.data(ϵ(valData, valTarget)) - valErr[1]) / valErr[1]) > .98
+			# 	break
+			# end
 		end
 	end
 	time = Base.time()
 	testFinalErr = Tracker.data(ϵ(testData, testTarget))
 	fptime = Base.time() - time
-	testErr = Tracker.data(abs((testInitError - testFinalErr) / testInitError)) * 100  # percentage test err decreased
+	# percentage of decrease in test error before & after training
+	testErr = Tracker.data((testInitErr - testFinalErr) / testInitErr) * 100
 
-	# save PQ, predicted vm, va values for N \ T
-	testPredict = model(testData)
-	save("$(case)_predict.jld2", "predict", testPredict, "PQ", testData[vaSplit*2+1:end, :])
+	# save predicted vm, va values for N \ T
+	testPredict = cpu(Tracker.data(model(testData)))
+	testData = cpu(testData[vaSplit*2+1:end, :])  # PD, QD values
+	matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
+		"case_name" => case,
+		"T" => T,
+		"lambda" => λ,
+		"vpredict" => testPredict,
+		"pq" => testData
+	))  # save predicted
+
+	# save final model
+	model = cpu(model)
+	@save "$(case)_model_$(T)T_$(λ)λ.bson" model  # to get weights, use Tracker.data()
+	# save loss and accuracy data
+	matwrite("$(case)_loss_acc_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
+		"case_name" => case,
+		"T" => T,
+		"lambda" => λ,
+		"trainLoss" => trainLoss,
+		"trainErr" => trainErr,
+		"valLoss" => valLoss,
+		"valErr" => valErr
+	))
 
 	# write result to file
 	trainlog = open("$(case)_train_output.log", "a")
 	println(trainlog, "Finished training after $elapsedEpochs epochs and $(round(
-			training_time, digits=3)) seconds")
-	println(trainlog, "Hyperparameters used: learning rate = $lr, "
-			* "batch_size = $batch_size, number of hidden layers = $nlayers")
-	println(trainlog, "Total samples in dataset: $N")
-	println(trainlog, "  => Percentage of training + validation samples: $(T*100)%")
-	println(trainlog, "  => Percentage of test set samples (forward pass): $((1-T)*100)%")
-	println(trainlog, "Test set forward pass took $(round(fptime, digits=4)) seconds.")
-	println(trainlog, "Initial test error = $testInitErr Final test error = $testFinalErr.")
+			training_time, digits=5)) seconds")
+	println(trainlog, "Hyperparameters used: T = $T, λ = $λ, learning rate = $lr, "
+			* "batch_size = $batch_size")
+	println(trainlog, "Test set forward pass took $(round(fptime, digits=5)) seconds.")
+	println(trainlog, "Initial test error = $testInitErr, Final test error = $testFinalErr.")
 	println(trainlog, "Test error Decreased by $(testErr)% after forward pass.")
 	println(trainlog, "")  # new line
 	close(trainlog)
-
-	# save final model
-	model = cpu(model)
-	@save "$(case)_model.bson" model  # to get weights, use Tracker.data()
-	# save loss and accuracy data
-	save("$(case)_loss_acc_data.jld2", "trainLoss", trainLoss,
-		"trainErr", trainErr, "valLoss", valLoss, "valErr", valErr)
-	# plot_results(trainLoss, trainErr, valLoss, valErr, case)
 	println("Total training performance:")
 end
 
@@ -187,25 +194,22 @@ end
 Running on command line (assuming train.jl is in current directory):
 
 1. default hyperparameters:
-`/path/to/julia run_train.jl <case name> -d
+`/path/to/julia run_train.jl <case name> <train ratio> <λ>
 
 2. custom hyperparameters (currently must be complete):
-`/path/to/julia run_train.jl <case name> <retrain Y/N> <learning rate> <epochs>
- 	<batch size> <train ratio>`
+`/path/to/julia run_train.jl <case name> <train ratio> <λ> <retrain Y/N>
+ 	<learning rate> <epochs <batch size>`
 TODO: accommodate vararg hyperparameter set
 """
 
 function main(args::Array{String})
 	error = false
 	case = args[1]  # case name, is String
-	if length(args) != 7 && length(args) != 2
-		println("Incorrect number of arguments provided. Expected 2 or 7, received $(length(args))")
+	if length(args) != 7 && length(args) != 3
+		println("Incorrect number of arguments provided. Expected 3 or 7, received $(length(args))")
 		error = true
-	elseif length(args) == 2 && args[2] != "-d"
-		println("Unknown option. Expected -d or custom hyperparameters, received \"$(args[2])\"")
-		error = true
-	elseif isfile("$(case)_pf_results.jld2") == false
-		println("Dataset $(case)_pf_results.jld2 not found in current directory. Exiting...")
+	elseif isfile("$(case)_data.mat") == false || isfile("$(case)_target.mat") == false
+		println("$case data or target not found in current directory. Exiting...")
 		error = true
 	end
 
@@ -213,9 +217,10 @@ function main(args::Array{String})
 		return Nothing
 	end
 	# load dataset from local directory
-	data = FileIO.load("$(case)_pf_results.jld2")["data"]
-	target = FileIO.load("$(case)_pf_results.jld2")["target"]
+	data = matread("$(case)_data.mat")["data"]
+	target = matread("$(case)_target.mat")["target"]
 	println("Dataset loaded at $(now())")
+
 	# Float32 should decrease memory allocation demand and run much faster on
 	# non professional GPUs
 	if typeof(data) != Array{Float32, 2}
@@ -224,18 +229,47 @@ function main(args::Array{String})
 	if typeof(target) != Array{Float32, 2}
 		target = convert(Array{Float32}, target)
 	end
+
 	# calculate hidden layer size(s) based on dataset feature size
 	K1 = round(Int, (size(data)[2] + size(target)[2]) / 2)
+	T = parse(Float64, args[2])
+	λ = parse(Float64, args[3])
 	default_param = true
 	if length(args) == 7
-		retrain = (args[2]=="Y" || args[2]=="y") ? true : false
-		lr = parse(Float64, args[3])
-		epochs = parse(Int64, args[4])
-		bs = parse(Int64, args[5])
-		T = parse(Float64, args[6])
-		λ = parse(Float64, args[7])
+		retrain = (args[4]=="Y" || args[2]=="y") ? true : false
+		lr = parse(Float64, args[5])
+		epochs = parse(Int64, args[6])
+		bs = parse(Int64, args[7])
 		default_param = false
 	end
+
+	# check if model is trained and does not need to be retrained
+	if isfile("$(case)_model_$(T)T_$(λ)λ.bson") == true &&
+			(default_param == true || retrain == false)
+		trainlog = open("$(case)_train_output.log", "a")
+		println(trainlog, "Model already trained! Performing forward pass...")
+		# load model to GPU
+		@load "$(case)_model_$(T)T_$(λ)λ.bson" model
+		model = model |> gpu
+		data = data[:, round(Int, T*size(data)[2])+1:end] |> gpu  # take N \ T for forward pass
+		t = time()
+		predict = model(data)
+		println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
+				"$(round(time() - t, digits=5)) seconds")
+		vSplit = Int(size(data)[1] / 2)  # vSplit+1:end = index range of P, Q features
+		predict = cpu(Tracker.data(predict))
+		data = cpu(data[vSplit+1:end, :])
+		matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
+			"case_name" => case,
+			"T" => T,
+			"lambda" => λ,
+			"vpredict" => predict,
+			"pq" => data
+		))  # save predicted
+		close(trainlog)
+		println("Program finished at $(now()). Exiting...")
+		return nothing
+    end
 
 	trainlog = open("$(case)_train_output.log", "a")
 	println(trainlog, "Training a model for $case at $(now())...")
@@ -243,11 +277,12 @@ function main(args::Array{String})
 
 	# train
 	if default_param == true
-		@time train_net(case, data, target, .2, K1)  # K2 is same size as K1
+		@time train_net(case, data, target, T, λ, K1)
 	else
-		@time train_net(case, data, target, T, K1, lr, epochs, bs, λ, retrain)
+		@time train_net(case, data, target, T, λ, K1, lr, epochs, bs, retrain)
 	end
 	println("Program finished at $(now()). Exiting...")
 end
 
 # main(ARGS)
+main(["case30", "0.2", "5.0"])
