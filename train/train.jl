@@ -6,6 +6,7 @@ We assume there is CUDA hardware; if error(s) are reported, comment it out and
 
 using CuArrays, Flux  # GPU, ML libraries
 using Flux.Optimise: ADAM
+using Flux: testmode!  # deactivate dropout layer
 using Statistics # to use mean()
 using Random  # shuffling for mini batch; not setting a random seed here
 using LinearAlgebra
@@ -24,9 +25,9 @@ CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Va
 
 """
 	train_net(case::String, data::Array{Float32}, target::Array{Float32},
-			vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
-			K2::Int64=0, lr::Float64=1e-4, epochs::Int64=100,
-			batch_size::Int64=32, retrain::Bool=false)
+		   vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
+		   K2::Int64=0, lr::Float64=1e-3, epochs::Int64=200,
+		   batch_size::Int64=32, retrain::Bool=false)
 Train an MLP with provided dataset or load trained model. Saves trained model
 with checkpointing, as well as the loss and accuracy data in current directory.
 
@@ -58,38 +59,39 @@ Note that there might not be enough memory on the GPU if not running on clusters
 """
 function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 			vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
-			K2::Int64=0, lr::Float64=1e-3, epochs::Int64=100,
+			K2::Int64=0, lr::Float64=1e-3, epochs::Int64=200,
 			batch_size::Int64=32, retrain::Bool=false)
 
 	# separate out training + validation (80/20) set, and N \ T for "test set"
 	# also get the start and end indices of VA
 	L, N = size(data)  # L = numPQ * 4, N = num samples
-	va_end_idx = Int(L/4)  # will always be int, so no need to call round()
-	vm_end_idx = Int(L/2)
+	va_end_idx = Int(L/2)  # will always be int, so no need to call round()
+	# vm_end_idx = Int(L/2)
 	trainSplit = round(Int32, N * T * 0.8)
 	valSplit = round(Int32, N * T)
 
 	trainData = data[:, 1:trainSplit] |> gpu
 	trainTarget = target[:, 1:trainSplit] |> gpu
-	valData = data[:, trainSplit+1:valSplit]
-	valTarget = target[:, trainSplit+1:valSplit]
-	testData = data[:, valSplit+1:end]
-	testTarget = target[:, valSplit+1:end]
+	valData = data[:, trainSplit+1:valSplit] |> gpu
+	valTarget = target[:, trainSplit+1:valSplit] |> gpu
+	testData = data[:, valSplit+1:end] |> gpu
+	testTarget = target[:, valSplit+1:end] |> gpu
 
 	# network model: if K2 is nonzero, there are two hidden layers, otherwise 1
 	nlayers = 1  # number of hidden layer(s)
-	layer1 = Dense(size(data)[1], K1, relu)  # weight matrix 1
-	layer2 = Dense(K1, size(target)[1]) # weight matrix 2
-	model = Chain(layer1, layer2) # foward pass: ŷ = model(x)
-	# if K2 != 0  # second hidden layer, optional
-	# 	layer2 = Dense(K1, K2, relu)
-	# 	layer3 = Dense(K2, size(target)[1])
-	# 	model = Chain(layer1, layer2, layer3)
-	# 	nlayers = 2
-	# end
+	W1 = Dense(size(data)[1], K1, relu)  # weight matrix 1
+	W2 = Dense(K1, size(target)[1]) # weight matrix 2
+	model = Chain(W1, Dropout(0.1), W2) |> gpu # foward pass: ŷ = model(x)
+	if K2 != 0  # second hidden layer, optional
+		W2 = Dense(K1, K2, relu)
+		W3 = Dense(K2, size(target)[1])
+		model = Chain(W1, Dropout(0.1), W2, Dropout(0.1), W3) |> gpu
+		nlayers = 2
+	end
 
-	# opt = ADAM(lr)  # ADAM optimizer
-	opt = Momentum(lr)
+	println(model)
+
+	opt = ADAM(lr)  # ADAM optimizer
 
 	######################## lambda functions start ############################
 	# loss function and "accuracy" measure
@@ -109,16 +111,12 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	init_test_vm_norm = Tracker.data(norm_vm(testData, testTarget, va_end_idx+1))
 	init_val_va_norm = Tracker.data(norm_va(valData, valTarget, va_end_idx))  # for early stopping
 	init_val_vm_norm = Tracker.data(norm_vm(valData, valTarget, va_end_idx+1))
+	init_train_va_norm = Tracker.data(norm_va(trainData, trainTarget, va_end_idx))
+	init_train_vm_norm = Tracker.data(norm_vm(trainData, trainTarget, va_end_idx+1))
 
-	trainLoss, trainErr, valLoss, valErr = Float32[], Float32[], Float32[], Float32[]
+	trainLoss, valLoss, = Float32[], Float32[]
 	epochTrainLoss, epochTrainErr = 0.0, 0.0
 	batchData, batchTarget = undef, undef
-
-	valData = valData |> gpu
-	valTarget = valTarget |> gpu
-	testData = testData |> gpu
-	testTarget = testTarget |> gpu
-	model = model |> gpu
 
 	elapsedEpochs = 0
 	training_time = 0.0  # excludes early stop condition & checkpointing overhead
@@ -134,57 +132,63 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
     end
 
 	############################# training ##################################
+	train_va_norm = init_train_va_norm
+	last_improved_epoch = 1
 	for epoch = 1:epochs
-		time = Base.time()
-		println("epoch: $epoch")
+		# println("epoch: $epoch")
 		# record validation set loss/err values of current epoch
 		# before training so that we know the val loss/err in the beginning
 		push!(valLoss, Tracker.data(loss(valData, valTarget)))
 		epochTrainLoss, epochTrainErr = 0.0, 0.0   # reset values
 		Random.shuffle!(randIdx) # to shuffle training set
 		i = 1
+		time = Base.time()
 		for j = 1:numBatches
 			batchData = trainData[:, randIdx[i:i+batch_size]]
 			batchTarget = trainTarget[:, randIdx[i:i+batch_size]]
 			Flux.train!(loss, Flux.params(model), [(batchData, batchTarget)], opt)
-			# record train set loss/err every mini-batch
+			# record training set loss every mini-batch
 			push!(trainLoss, Tracker.data(loss(batchData, batchTarget)))
-			i += batch_size
+			i += batch_size+1  # without +1 there will be overlap
+			if i+batch_size > trainSplit  # out of bounds indexing check
+				break
+			end
 		end
 		training_time += Base.time() - time
 		elapsedEpochs = epoch
 
-		# # checkpoint if val err decreased; to load, change @save to @load
-		# if epoch % 5 == 0 && epoch > 1 && valErr[end] < valErr[end-1]
-		# 	model_checkpt = cpu(model)
-		# 	@save "$(case)_model_$(T)T_$(λ)λ_ep$epoch.bson" model_checkpt  # to get weights, use Tracker.data()
-		# end
-		##############################
-		# # early exit condition on val loss
-		# if length(valLoss) > 1 && valLoss[end] > valLoss[end-1]
-		# 	push!(earlyStopInd, 1)
-		# 	# val loss increased over the last 3 epochs, overfitting starts
-		# 	if length(earlyStopInd) > 3 && sum(earlyStopInd[end-2:end]) == 3
-		# 		break
-		# 	end
-		# else
-		# 	push!(earlyStopInd, 0)  # indicates val loss decreased
-		# 	# another early stop condition: val err decreased by more than 98%
-		# 	# if ((Tracker.data(ϵ(valData, valTarget)) - valErr[1]) / valErr[1]) > .98
-		# 	# 	break
-		# 	# end
-		# end
+		testmode!(model)  # early stopping criteria, so put in test mode
 		if Δ_va(valData, valTarget, va_end_idx, init_val_va_norm) <= 0.005
 			break
 		end
+
+		# lr decay: if train loss doesn't decrease for 5 consecutive epochs,
+		# otherwise update last improved epoch to be current epoch, and current
+		# train_va_norm which initially equals to init_train_va_norm
+		if Δ_va(trainData, trainTarget, va_end_idx, train_va_norm) < 1.
+			train_va_norm = Tracker.data(norm_va(trainData, trainTarget, va_end_idx))
+			last_improved_epoch = epoch
+		elseif (epoch - last_improved_epoch) >= 5 && opt.eta > 1e-8
+			opt.eta /= 10.0
+			@warn("No improvements for the last 5 epochs. Decreased lr to" *
+			 	" $(opt.eta) at epoch $epoch.")
+			last_improved_epoch = epoch
+		end
+		testmode!(model, false)  # back to training mode
 	end
 
-	# calculate change in test_vm, test_va compared to init_...
-	Δtest_va = Δ_va(testData, testTarget, va_end_idx, init_test_va_norm)
-	Δtest_vm = Δ_vm(testData, testTarget, va_end_idx+1, init_test_vm_norm)
+	testmode!(model)  # done training, change to test mode
+	println(model)
 
-	println(Δtest_va)
-	println(Δtest_vm)
+	# calculate change in test_vm, test_va compared to init_...
+	Δtest_va = Tracker.data(Δ_va(testData, testTarget, va_end_idx, init_test_va_norm))
+	Δtest_vm = Tracker.data(Δ_vm(testData, testTarget, va_end_idx+1, init_test_vm_norm))
+
+	Δtrain_va = Tracker.data(Δ_va(trainData, trainTarget, va_end_idx, init_train_va_norm))
+	Δtrain_vm = Tracker.data(Δ_vm(trainData, trainTarget, va_end_idx+1, init_train_vm_norm))
+
+	println("Test: Δvm = $Δtest_vm, Δva = $Δtest_va")
+	println("Train: Δvm = $Δtrain_vm, Δva = $Δtrain_va")
 
 	# forward pass
 	time = Base.time()
@@ -193,30 +197,27 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 
 	# save predicted vm (plus shifted mean), va values for N \ T
 	testPredict = cpu(Tracker.data(testPredict))
-	print(size(vm_mean_shift[valSplit+1:end]))
-	print(size(testPredict[va_end_idx+1:end, :]))
-	testPredict[va_end_idx+1:end, :] .+= vm_mean_shift[valSplit+1:end]
-	testData = cpu(testData[vm_end_idx+1:end, :])  # PD, QD values
+	testPredict[va_end_idx+1:end, :] .+= vm_mean_shift[:, valSplit+1:end]
+	# testData = cpu(testData[vm_end_idx+1:end, :])  # PD, QD values
 	matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
 		"case_name" => case,
 		"T" => T,
 		"lambda" => λ,
-		"vpredict" => testPredict,
-		"pq" => testData
+		"vpredict" => testPredict#,
+		# "pq" => testData
 	))  # save predicted
 
 	# save final model
 	model = cpu(model)
 	@save "$(case)_model_$(T)T_$(λ)λ.bson" model  # to get weights, use Tracker.data()
+
 	# save loss and accuracy data
 	matwrite("$(case)_loss_acc_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
 		"case_name" => case,
 		"T" => T,
 		"lambda" => λ,
 		"trainLoss" => trainLoss,
-		"trainErr" => trainErr,  # EMPTY
 		"valLoss" => valLoss,
-		"valErr" => valErr
 	))
 
 	# write result to file
@@ -268,6 +269,7 @@ function main(args::Array{String})
 	# # mean L2 norm of column wise ACVA - DCVA, ACVM - DCVM
 	# norm_va = matread("$(case)_perf_cs.mat")["norm_va"]
 	# norm_vm = matread("$(case)_perf_cs.mat")["norm_vm"]
+	@assert(size(data)[1] == size(target)[1])
 
 	println("Dataset loaded at $(now())")
 
@@ -281,7 +283,7 @@ function main(args::Array{String})
 	end
 
 	# calculate hidden layer size(s) based on dataset feature size
-	K1 = round(Int, (size(data)[2] + size(target)[2]) / 2)
+	K1 = round(Int, size(data)[1] * 2)
 	T = parse(Float64, args[2])
 	λ = parse(Float64, args[3])
 	default_param = true
@@ -294,36 +296,36 @@ function main(args::Array{String})
 	end
 
 	# check if model is trained and does not need to be retrained
-	if isfile("$(case)_model_$(T)T_$(λ)λ.bson") == true &&
-			(default_param == true || retrain == false)
-		trainlog = open("$(case)_train_output.log", "a")
-		println(trainlog, "Model already trained! Performing forward pass...")
-
-		# load model to GPU
-		@load "$(case)_model_$(T)T_$(λ)λ.bson" model
-		model = model |> gpu
-		data = data[:, round(Int, T*size(data)[2])+1:end] |> gpu  # take N \ T for forward pass
-
-		t = time()
-		predict = model(data)
-		println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
-				"$(round(time() - t, digits=5)) seconds")
-
-		# save predicted vm, va and the corresponding P, Q
-		pq_idx = Int(size(data)[1] / 2)  # pq_idx+1:end = index range of P, Q features
-		predict = cpu(Tracker.data(predict))
-		data = cpu(data[pq_idx+1:end, :])
-		matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
-			"case_name" => case,
-			"T" => T,
-			"lambda" => λ,
-			"vpredict" => predict,
-			"pq" => data
-		))
-		close(trainlog)
-		println("Program finished at $(now()). Exiting...")
-		return nothing
-    end
+	# if isfile("$(case)_model_$(T)T_$(λ)λ.bson") == true &&
+	# 		(default_param == true || retrain == false)
+	# 	trainlog = open("$(case)_train_output.log", "a")
+	# 	println(trainlog, "Model already trained! Performing forward pass...")
+	#
+	# 	# load model to GPU
+	# 	@load "$(case)_model_$(T)T_$(λ)λ.bson" model
+	# 	model = model |> gpu
+	# 	data = data[:, round(Int, T*size(data)[2])+1:end] |> gpu  # take N \ T for forward pass
+	#
+	# 	t = time()
+	# 	predict = model(data)
+	# 	println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
+	# 			"$(round(time() - t, digits=5)) seconds")
+	#
+	# 	# save predicted vm, va and the corresponding P, Q
+	# 	pq_idx = Int(size(data)[1] / 2)  # pq_idx+1:end = index range of P, Q features
+	# 	predict = cpu(Tracker.data(predict))
+	# 	data = cpu(data[pq_idx+1:end, :])
+	# 	matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
+	# 		"case_name" => case,
+	# 		"T" => T,
+	# 		"lambda" => λ,
+	# 		"vpredict" => predict,
+	# 		"pq" => data
+	# 	))
+	# 	close(trainlog)
+	# 	println("Program finished at $(now()). Exiting...")
+	# 	return nothing
+    # end
 
 	trainlog = open("$(case)_train_output.log", "a")
 	println(trainlog, "Training a model for $case at $(now())...")
@@ -331,12 +333,12 @@ function main(args::Array{String})
 
 	# train
 	if default_param == true
-		@time train_net(case, data, target, vm_mean_shift, T, λ, K1)
+		@time train_net(case, data, target, vm_mean_shift, T, λ, K1, K1)
 	else
 		@time train_net(case, data, target, vm_mean_shift, T, λ, K1, lr, epochs, bs, retrain)
 	end
 	println("Program finished at $(now()). Exiting...")
 end
 
-main(ARGS)
+# main(ARGS)
 # main(["case30", "0.2", "5.0"])
