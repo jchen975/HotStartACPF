@@ -18,11 +18,6 @@ using Dates
 using ForwardDiff
 CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Val{2}) = x*x
 
-# # ELU activation function rotated CW by 180 degrees
-# # VM (after shifting) and VA both (usually) have negative mean, and max VM
-# # (not shifted) is just over 1, so let α = 1.5
-# invELU(x, α=1.5) = x < 0 ? x : α*(1 - exp(-x))
-
 """
 	train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		   vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
@@ -77,26 +72,29 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	testData = data[:, valSplit+1:end] |> gpu
 	testTarget = target[:, valSplit+1:end] |> gpu
 
+	opt = ADAM(lr)  # ADAM optimizer
+	# actfn(x) = leakyrelu(x, 0.05)
+	actfn = elu  # ELU activation function; seems to work better than ReLU/LeakyReLU
+
 	# network model: if K2 is nonzero, there are two hidden layers, otherwise 1
 	nlayers = 1  # number of hidden layer(s)
-	W1 = Dense(size(data)[1], K1, relu)  # weight matrix 1
+	W1 = Dense(size(data)[1], K1, actfn)  # weight matrix 1
 	W2 = Dense(K1, size(target)[1]) # weight matrix 2
 	model = Chain(W1, Dropout(0.1), W2) |> gpu # foward pass: ŷ = model(x)
 	if K2 != 0  # second hidden layer, optional
-		W2 = Dense(K1, K2, relu)
+		W2 = Dense(K1, K2, actfn)
 		W3 = Dense(K2, size(target)[1])
 		model = Chain(W1, Dropout(0.1), W2, Dropout(0.1), W3) |> gpu
 		nlayers = 2
 	end
 
-	println(model)
-
-	opt = ADAM(lr)  # ADAM optimizer
+	# println(model)
 
 	######################## lambda functions start ############################
 	# loss function and "accuracy" measure
 	lossva(x, y) = λ * Flux.mse(model(x)[1:va_end_idx, :], y[1:va_end_idx, :])
 	lossvm(x, y) = Flux.mse(model(x)[va_end_idx+1:end, :], y[va_end_idx+1:end, :])
+	# lossvm(x, y) = mean(sum(abs.(model(x)[va_end_idx+1:end, :] - y[va_end_idx+1:end, :])))
 	loss(x, y) =  lossva(x, y) + lossvm(x, y)
 
 	norm_va(x, y, end_idx::Int64) = norm((y - model(x))[1:end_idx, :])  # L2 norm of (AC - predict) va
@@ -132,8 +130,9 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
     end
 
 	############################# training ##################################
+	# testmode!(model)
 	train_va_norm = init_train_va_norm
-	last_improved_epoch = 1
+	last_improved_epoch, lr_count = 1, 0
 	for epoch = 1:epochs
 		# println("epoch: $epoch")
 		# record validation set loss/err values of current epoch
@@ -157,7 +156,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		training_time += Base.time() - time
 		elapsedEpochs = epoch
 
-		testmode!(model)  # early stopping criteria, so put in test mode
+		# testmode!(model)  # early stopping criteria, so put in test mode
 		if Δ_va(valData, valTarget, va_end_idx, init_val_va_norm) <= 0.005
 			break
 		end
@@ -168,11 +167,15 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		if Δ_va(trainData, trainTarget, va_end_idx, train_va_norm) < 1.
 			train_va_norm = Tracker.data(norm_va(trainData, trainTarget, va_end_idx))
 			last_improved_epoch = epoch
-		elseif (epoch - last_improved_epoch) >= 5 && opt.eta > 1e-8
+			lr_count = 0
+		elseif (epoch - last_improved_epoch) >= 5 && opt.eta >= 1e-8
 			opt.eta /= 10.0
 			@warn("No improvements for the last 5 epochs. Decreased lr to" *
 			 	" $(opt.eta) at epoch $epoch.")
 			last_improved_epoch = epoch
+			lr_count += 1
+		elseif lr_count == 3 || opt.eta <= 1e-9  # no improvements over 15 epoches or reached min lr
+			break
 		end
 		testmode!(model, false)  # back to training mode
 	end
@@ -203,8 +206,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		"case_name" => case,
 		"T" => T,
 		"lambda" => λ,
-		"vpredict" => testPredict#,
-		# "pq" => testData
+		"vpredict" => testPredict,
 	))  # save predicted
 
 	# save final model
@@ -227,7 +229,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	println(trainlog, "Hyperparameters used: T = $T, λ = $λ, learning rate = $lr, "
 			* "batch_size = $batch_size, hidden layers = $nlayers")
 	println(trainlog, "Test set Results: ")
-	println(trainlog, "  >> Forward pass: $(round(fptime, digits=5)) seconds")
+	println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
 	println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_va*100)% of initial")
 	println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_vm*100)% of initial")
 	println(trainlog, "")  # new line
