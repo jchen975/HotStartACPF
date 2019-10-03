@@ -16,9 +16,6 @@ function [V_M, V_A, itr_et, fail] = dc(str, P, Q)
     % run dcpf numSample times
     mpopt = mpoption('out.all', 0, 'verbose', 0);
     for i = 1:numSample
-        if mod(i, 1000) == 0
-            fprintf(' >> dcpf iteration %d\n', i);
-        end
         mpc.bus(:, PD) = P(:, i);
         mpc.bus(:, QD) = Q(:, i);
         ret = rundcpf(mpc, mpopt);
