@@ -1,4 +1,4 @@
-function [V_M, V_A, itr_et, itr_n, fail] = ac_cs(str, P, Q)
+function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
     define_constants;
     mpc = loadcase(str);
     
@@ -14,12 +14,13 @@ function [V_M, V_A, itr_et, itr_n, fail] = ac_cs(str, P, Q)
     numSample = size(P, 2);
     itr_n = zeros(numSample, 1);  % number of iteration each sample
     itr_et = zeros(numSample, 1);  % iteration elapsed time
+    mismatch = zeros([10, numSample], 'single');  % N by itr matrix containing the PQ mismatch info
     
     % arr for i-th failed NR
     fail = [];  % should preallocate for perf, but ret.et is the NR time so I don't care
     
     % run acpf numSample times
-    mpopt = mpoption('out.all', 0, 'verbose', 0, 'pf.nr.max_it', 200);  % verbose = 2 if want to print max P,Q mismatch
+    mpopt = mpoption('out.all', 0, 'verbose', 0);
     for i = 1:numSample
         mpc.bus(:, PD) = P(:, i);
         mpc.bus(:, QD) = Q(:, i);
@@ -29,8 +30,9 @@ function [V_M, V_A, itr_et, itr_n, fail] = ac_cs(str, P, Q)
         if ret.success == 1
             V_M(:, i) = ret.bus(:, VM);
             V_A(:, i) = ret.bus(:, VA);
+            mismatch(:, i) = ret.mismatch;
             itr_n(i) = ret.iterations;
-            itr_et(i) = ret.et;
+            itr_et(i) = ret.et;            
         else
             fail = [fail, i];
         end
