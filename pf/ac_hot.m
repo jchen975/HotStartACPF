@@ -18,7 +18,6 @@ function ac_hs(c, T, lambda)
         V_A = rad2deg(vpredict(1:numBus, :));
         V_M = vpredict(numBus+1:end, :);
         
-        
         % flat start vm = 1 except PV bus, all va = 0
         gen_idx = find(mpc.bus(:, BUS_TYPE) == PV);
         flat_vm = ones(size(V_M, 1), 1, 'single');  
@@ -33,7 +32,7 @@ function ac_hs(c, T, lambda)
 
         % run acpf numSample times
         mpopt = mpoption('out.all', 0, 'verbose', 2, 'pf.nr.max_it', 30);
-        for i = 1:5%numSample
+        for i = 1:numSample
             mpc.bus(:, PD) = P(:, i);
             mpc.bus(:, QD) = Q(:, i);
             mpc.bus(:, VM) = flat_vm;
@@ -59,8 +58,8 @@ function ac_hs(c, T, lambda)
         
         T_str = num2str(T);
         lambda_str = char(sprintf("%.1f", lambda));
-        fn = ['./results/', c, '_perf_hs_', T_str, 'T_', lambda_str, 'lambda.mat'];
-%         save(fn, 'itr_ac', 'et_ac')
+        fn = [c, '_perf_hs_', T_str, 'T_', lambda_str, 'lambda.mat'];  % ADD ./results IN FRONT IF RUNNING AT ESG
+        save(fn, 'itr_ac', 'et_ac')
 %         cd ..
 %         perf(c, 'hs', T_str, lambda_str);  % print performance
 %         cd ./pf
