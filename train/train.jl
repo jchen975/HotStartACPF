@@ -54,7 +54,7 @@ Note that there might not be enough memory on the GPU if not running on clusters
 """
 function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 			vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
-			K2::Int64=0, lr::Float64=1e-3, epochs::Int64=200,
+			K2::Int64=0, lr::Float64=1e-3, epochs::Int64=500,
 			batch_size::Int64=32, retrain::Bool=false)
 
 	# separate out training + validation (80/20) set, and N \ T for "test set"
@@ -80,11 +80,11 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 	nlayers = 1  # number of hidden layer(s)
 	W1 = Dense(size(data)[1], K1, actfn)  # weight matrix 1
 	W2 = Dense(K1, size(target)[1]) # weight matrix 2
-	model = Chain(W1, Dropout(0.1), W2) |> gpu # foward pass: ŷ = model(x)
+	model = Chain(W1, W2) |> gpu # foward pass: ŷ = model(x)
 	if K2 != 0  # second hidden layer, optional
 		W2 = Dense(K1, K2, actfn)
 		W3 = Dense(K2, size(target)[1])
-		model = Chain(W1, Dropout(0.1), W2, Dropout(0.1), W3) |> gpu
+		model = Chain(W1, W2, W3) |> gpu
 		nlayers = 2
 	end
 
@@ -130,7 +130,6 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
     end
 
 	############################# training ##################################
-	# testmode!(model)
 	train_va_norm = init_train_va_norm
 	last_improved_epoch, lr_count = 1, 0
 	for epoch = 1:epochs
@@ -156,7 +155,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		training_time += Base.time() - time
 		elapsedEpochs = epoch
 
-		# testmode!(model)  # early stopping criteria, so put in test mode
+		 # early stopping criteria, so put in test mode
 		if Δ_va(valData, valTarget, va_end_idx, init_val_va_norm) <= 0.005
 			break
 		end
@@ -177,11 +176,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		elseif lr_count == 3 || opt.eta <= 1e-9  # no improvements over 15 epoches or reached min lr
 			break
 		end
-		testmode!(model, false)  # back to training mode
 	end
-
-	testmode!(model)  # done training, change to test mode
-	println(model)
 
 	# calculate change in test_vm, test_va compared to init_...
 	Δtest_va = Tracker.data(Δ_va(testData, testTarget, va_end_idx, init_test_va_norm))
