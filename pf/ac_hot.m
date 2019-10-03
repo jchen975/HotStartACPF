@@ -1,5 +1,5 @@
 % c, T, lambda are all strings, ex. ac_hs('case30', '0.2', '2.0')
-function ac_hs(c, T, lambda)  
+function ac_hot(c, T, lambda)  
     define_constants;
 
     c = char(c);
