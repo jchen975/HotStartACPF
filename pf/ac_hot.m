@@ -31,7 +31,7 @@ function ac_hot(c, T, lambda)
         fail = [];  % should preallocate for perf, but ret.et is the NR time so I don't care
 
         % run acpf numSample times
-        mpopt = mpoption('out.all', 0, 'verbose', 2, 'pf.nr.max_it', 30);
+        mpopt = mpoption('out.all', 0, 'verbose', 0, 'pf.tol', 1e-3);
         for i = 1:numSample
             mpc.bus(:, PD) = P(:, i);
             mpc.bus(:, QD) = Q(:, i);

@@ -20,7 +20,7 @@ function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
     fail = [];  % should preallocate for perf, but ret.et is the NR time so I don't care
     
     % run acpf numSample times
-    mpopt = mpoption('out.all', 0, 'verbose', 0);
+    mpopt = mpoption('out.all', 0, 'verbose', 0, 'pf.tol', 1e-3);
     for i = 1:numSample
         mpc.bus(:, PD) = P(:, i);
         mpc.bus(:, QD) = Q(:, i);
