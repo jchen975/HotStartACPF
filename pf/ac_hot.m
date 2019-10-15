@@ -7,11 +7,11 @@ function ac_hot(c, T, lambda)
     if isfile([c, '_predict_', T, 'T_', lambda, 'lambda.mat']) && isfile([c, '_pqvar.mat'])
         % load predicted vm, va and the original P, Q
         load([c, '_predict_', T, 'T_', lambda, 'lambda.mat']);
-        load([c, '_pqvar.mat']);
+        load([c, '_dataset.mat']);
 
         numBus = size(mpc.bus, 1);
         N = size(P, 2);
-        numSample = int32((1-T)*N);  % N \ T
+        numSample = int32((1-T)*N);  % N \ T, number of hot starts
 
         P = P(:, (N-numSample+1):end);
         Q = Q(:, (N-numSample+1):end);
