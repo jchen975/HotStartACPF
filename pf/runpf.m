@@ -390,7 +390,9 @@ end
 mpc.et = toc(t0);
 mpc.success = success;
 mpc.iterations = its;
-mpc.mismatch = mismatch
+if ~dc
+    mpc.mismatch = mismatch;
+end
 
 %%-----  output results  -----
 %% convert back to original bus numbering & print results
