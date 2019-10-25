@@ -1,7 +1,6 @@
 function [P, Q, Pp, Qp] = pq_var(str, numSample)
     define_constants;
     rng(99);  % set rand seed
-    s = rng;
     mpc = loadcase(str);
     numBus = size(mpc.bus, 1);
     
@@ -9,8 +8,8 @@ function [P, Q, Pp, Qp] = pq_var(str, numSample)
     P = zeros([numBus, numSample], 'single');  % equivalent of Julia Float32
     for i = 1:numBus
         avg_p = mpc.bus(i, PD);  % bus PD
-        % avg_p could be negative, but std should be the same as if
-        % it's positive
+        % avg_p could be negative, but std should be the same as if it's
+        % positive
         std_p = 5.44130 + 0.17459*sqrt(abs(avg_p)) + 0.001673*abs(avg_p);
         dist = makedist('Normal', 'mu', avg_p, 'sigma', std_p);
         P(i, :) = random(dist, 1, numSample);
@@ -43,10 +42,4 @@ function [P, Q, Pp, Qp] = pq_var(str, numSample)
     P_og = mpc.bus(:, PD);
     Pp = (P - P_og) ./ P_og;
     Pp(Q_og == 0.0, :) = 0.0;
-    
-    %%
-    % save PD, QD to file in the case that one or more columns of P,Q
-    % result in failed pf, we know the values that cause the failures
-    % also save the rng setting
-%     save(['./results/', str, '_pqvar.mat'], 'P', 'Q', 's');
 end
