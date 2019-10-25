@@ -40,6 +40,7 @@ function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
     if length(fail) > 0
         fprintf(' Number of failed samples: %i\n', length(fail));
     end
-    assert(size(P, 2) == numSample && size(Q, 2) == numSample && size(V_M, 2) == numSample && size(V_A, 2) == numSample);
-    assert(length(itr_et) == numSample && length(itr_n) == numSample);
+%     assert(size(P, 2) == numSample && size(Q, 2) == numSample && size(V_M, 2) == numSample && size(V_A, 2) == numSample);
+%     assert(length(itr_et) == numSample && length(itr_n) == numSample);
+    
 end
