@@ -1,4 +1,4 @@
-function [P, Q, Qp] = pq_var(str, numSample)
+function [P, Q, Pp, Qp] = pq_var(str, numSample)
     define_constants;
     rng(99);  % set rand seed
     s = rng;
@@ -35,15 +35,18 @@ function [P, Q, Qp] = pq_var(str, numSample)
     P(gen_idx, :) = repmat(mpc.bus(gen_idx, PD), 1, numSample);
     Q(gen_idx, :) = repmat(mpc.bus(gen_idx, QD), 1, numSample);
     
-    %% Calculate \deltaQ as percentage
-    % if Q_og(i) is 0, percentage is undefined, so set as 0
-    Q_og = mpc.bus(:, QD);
+    %% Calculate change in P, Q as percentage
+    % if Q_og(i) is 0, percentage is undefined, so set as 0, same for P
+    Q_og = mpc.bus(:, QD); 
     Qp = (Q - Q_og) ./ Q_og;
     Qp(Q_og == 0.0, :) = 0.0;
+    P_og = mpc.bus(:, PD);
+    Pp = (P - P_og) ./ P_og;
+    Pp(Q_og == 0.0, :) = 0.0;
     
     %%
-    % save PD, QD to file in the case that one or more columns of P,Q 
+    % save PD, QD to file in the case that one or more columns of P,Q
     % result in failed pf, we know the values that cause the failures
     % also save the rng setting
-%     save(['./results/', str, '_pqvar.mat'], 'P', 'Q', 's'); 
+%     save(['./results/', str, '_pqvar.mat'], 'P', 'Q', 's');
 end
