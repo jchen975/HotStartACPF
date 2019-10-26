@@ -82,41 +82,41 @@ Separate out training + validation (80/20) set, and N-T for "test set"
 """
 function split_dataset(data::Array{Float32}, target::Array{Float32},
 			nn_type::String, T::Float64)
-		N = size(data, 2)
-		trainSplit = round(Int32, N * T * 0.8)
-		valSplit = round(Int32, N * T)
+	N = size(data, 2)
+	trainSplit = round(Int32, N * T * 0.8)
+	valSplit = round(Int32, N * T)
 
-		if nn_type == "mlp"  # flatten 3d data/target into 2d, [numBus * 4, N]
-			data = vcat(data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4])
-			if size(target,3) > 1  # if not trained separately
-				target = vcat(target[:,:,1], target[:,:,2])
-			end
-
-			trainData = data[:, 1:trainSplit]
-			trainTarget = target[:, 1:trainSplit]
-			valData = data[:, trainSplit+1:valSplit]
-			valTarget = target[:, trainSplit+1:valSplit]
-			testData = data[:, valSplit+1:end]
-			testTarget = target[:, valSplit+1:end]
-		elseif nn_type == "conv"
-			# data is currently (numBus, N, numFeature) == HNC, need to add W
-			# axis and flip N and C to be WHCN, don't need to touch target
-			data = permutedims(data, [1,3,2])
-			data = reshape(data, (1, size(data,1), size(data,2), size(data,3)))
-			if size(target,3) > 1  # if not trained separately
-				target = vcat(target[:,:,1], target[:,:,2])
-			end
-
-			trainData = data[:, :, :, 1:trainSplit]
-			trainTarget = target[:, 1:trainSplit]  # remove last dimension (is 1)
-			valData = data[:, :, :, trainSplit+1:valSplit]
-			valTarget = target[:, trainSplit+1:valSplit]
-			testData = data[:, :, :, valSplit+1:end]
-			testTarget = target[:, valSplit+1:end]
-		else
-			@warn("Type of NN unspecified.")
-			return Nothing
+	if nn_type == "mlp"  # flatten 3d data/target into 2d, [numBus * 4, N]
+		data = vcat(data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4])
+		if size(target,3) > 1  # if not trained separately
+			target = vcat(target[:,:,1], target[:,:,2])
 		end
+
+		trainData = data[:, 1:trainSplit]
+		trainTarget = target[:, 1:trainSplit]
+		valData = data[:, trainSplit+1:valSplit]
+		valTarget = target[:, trainSplit+1:valSplit]
+		testData = data[:, valSplit+1:end]
+		testTarget = target[:, valSplit+1:end]
+	elseif nn_type == "conv"
+		# data is currently (numBus, N, numFeature) == HNC, need to add W
+		# axis and flip N and C to be WHCN, don't need to touch target
+		data = permutedims(data, [1,3,2])
+		data = reshape(data, (1, size(data,1), size(data,2), size(data,3)))
+		if size(target,3) > 1  # if not trained separately
+			target = vcat(target[:,:,1], target[:,:,2])
+		end
+
+		trainData = data[:, :, :, 1:trainSplit]
+		trainTarget = target[:, 1:trainSplit]  # remove last dimension (is 1)
+		valData = data[:, :, :, trainSplit+1:valSplit]
+		valTarget = target[:, trainSplit+1:valSplit]
+		testData = data[:, :, :, valSplit+1:end]
+		testTarget = target[:, valSplit+1:end]
+	else
+		@warn("Type of NN unspecified.")
+		return Nothing
+	end
 	return (trainData, trainTarget, valData, valTarget, testData, testTarget)
 end
 
