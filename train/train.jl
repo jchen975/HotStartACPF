@@ -6,7 +6,6 @@ We assume there is CUDA hardware; if error(s) are reported, comment it out and
 
 using CuArrays, Flux  # GPU, ML libraries
 using Flux.Optimise: ADAM
-using Flux: testmode!  # deactivate dropout layer
 using Statistics # to use mean()
 using Random  # shuffling for mini batch; not setting a random seed here
 using LinearAlgebra
@@ -14,103 +13,188 @@ using BSON, MAT  # saving and loading files
 using BSON: @save, @load
 using Dates
 
-# Fix culiteral_pow() error; check later to see if it is merged
+Random.seed!(521)  # mini-batch shuffling
+
+# Fix culiteral_pow() error; check later to see if fix is merged
 using ForwardDiff
 CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Val{2}) = x*x
 
+
 """
-	train_net(case::String, data::Array{Float32}, target::Array{Float32},
-		   vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
-		   K2::Int64=0, lr::Float64=1e-3, epochs::Int64=200,
-		   batch_size::Int64=32, retrain::Bool=false)
-Train an MLP with provided dataset or load trained model. Saves trained model
-with checkpointing, as well as the loss and accuracy data in current directory.
+	save_predict(case::String, T::Float64, va::Array{Float32}, vm::Array{Float32})
+Saves predicted results (va in degrees, vm .+ 1.0) and T value to .mat file
+"""
+function save_predict(case::String, T::Float64, va::Array{Float32}, vm::Array{Float32})
+	matwrite("$(case)_predict_$(T)T.mat", Dict{String, Any}(
+		"case_name" => case,
+		"T" => T,
+		"V_A" => rad2deg.(va),
+		"V_M" => vm .+ 1.0
+	))
+end
+
+
+"""
+	build_model(type::String, K::Int32)
+Returns the NN model: MLP with 2 hidden layers or 1D ConvNet
+
+ARGUMENTS:
+
+	type: a string, either "mlp" or "conv"
+	Fx, Fy: integers, input and output feature size
+	K: an integer, hidden layer size for MLP or input channel number for ConvNet
+"""
+function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
+	actfn = elu  # ELU activation function; seems to work better than ReLU/LeakyReLU
+	if type == "mlp"
+		# Dense are fully connected layers, i.e. weight matrices connecting
+		# in/output and hidden layers
+		model = Chain(
+			Dense(Fx, K, actfn),
+	   		Dense(K, K, actfn),
+	   		Dense(K, Fy)
+		)
+	elseif type == "conv"
+		channel1 = 8
+		channel2 = 16
+		final_hidden = convert(Int32, Fy*channel2)
+		# W = 1, H = numBus (Fy or 2Fy)
+		# C = numChannel (maximum 4, va, vm, p, q), N = numSample
+		# data needs to be in WHCN format (so conv filter is 1 by x)
+		model = Chain(
+			Conv((1,5), K=>channel1, pad=(0,2), actfn),  # C = 8, H unchanged with 2 padding
+			Conv((1,3), channel1=>channel2, pad=(0,1), actfn),  # C = 16, H unchanged with 1 padding
+			x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
+			Dense(final_hidden, Fy)
+		)
+	else
+		@warn("Type of NN unspecified.")
+		model = Nothing
+	end
+	return model
+end
+
+
+"""
+	split_dataset(data::Array{Float32}, target::Array{Float32}, nn_type::String,
+			T::Float64)
+Separate out training + validation (80/20) set, and N-T for "test set"
+"""
+function split_dataset(data::Array{Float32}, target::Array{Float32},
+			nn_type::String, T::Float64)
+		N = size(data, 2)
+		trainSplit = round(Int32, N * T * 0.8)
+		valSplit = round(Int32, N * T)
+
+		if nn_type == "mlp"  # flatten 3d data/target into 2d, [numBus * 4, N]
+			data = vcat(data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4])
+			if size(target,3) > 1  # if not trained separately
+				target = vcat(target[:,:,1], target[:,:,2])
+			end
+
+			trainData = data[:, 1:trainSplit]
+			trainTarget = target[:, 1:trainSplit]
+			valData = data[:, trainSplit+1:valSplit]
+			valTarget = target[:, trainSplit+1:valSplit]
+			testData = data[:, valSplit+1:end]
+			testTarget = target[:, valSplit+1:end]
+		elseif nn_type == "conv"
+			# data is currently (numBus, N, numFeature) == HNC, need to add W
+			# axis and flip N and C to be WHCN, don't need to touch target
+			data = permutedims(data, [1,3,2])
+			data = reshape(data, (1, size(data,1), size(data,2), size(data,3)))
+			if size(target,3) > 1  # if not trained separately
+				target = vcat(target[:,:,1], target[:,:,2])
+			end
+
+			trainData = data[:, :, :, 1:trainSplit]
+			trainTarget = target[:, 1:trainSplit]  # remove last dimension (is 1)
+			valData = data[:, :, :, trainSplit+1:valSplit]
+			valTarget = target[:, trainSplit+1:valSplit]
+			testData = data[:, :, :, valSplit+1:end]
+			testTarget = target[:, valSplit+1:end]
+		else
+			@warn("Type of NN unspecified.")
+			return Nothing
+		end
+	return (trainData, trainTarget, valData, valTarget, testData, testTarget)
+end
+
+
+# """
+# """
+# function make_batch(data::AbstractArray{Float32}, target::AbstractArray{Float32}
+# 			batch_size::Int64, )
+
+
+"""
+	train_net(data::Array{Float32}, target::Array{Float32}, case::String,
+			nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
+			epochs::Int64=500, batch_size::Int64=32)
+Train an MLP/1D ConvNet with provided dataset. Saves trained model weights
+as well as the loss and accuracy data in current directory.
 
 ARGUMENTS:
 
 	case: matpower case file name as a string; e.g. case118
 	data, target: dataset and ground truth, must be of dimension (K, N) where N
 		= number of samples and K = number of features
-	vm_mean_shift: the difference between mean-col-norm of (ACVM-DCVM) and that
-		of (ACVA-DCVA). Need to add back to ACVM before running hot start ACPF
+	nn_type: type of neural network, MLP w/ 2 hidden layers or 1D ConvNet
 	T: the ratio of training + validation set in N samples
-	λ: additional penalty term on voltage angle mismatches for MSE
-	K1: a positive integer, first hidden layer size
+	K: a positive integer, hidden layer size if nn_type is "mlp", or number of
+		"channels", i.e. features on each bus (maximum = 4 if va, vm, P, Q all
+		present)
 
 OPTIONAL ARGUMENTS:
 
-	K2 : a non-negative integer, second hidden layer size (default = 0)
 	lr: learning rate, default = 1e-3
 	epochs: default = 100
 	batch_size: a positive integer, default 64
-	retrain: if `true` and a trained model already exists in current directory, then
-		load the model, perform forward pass with data and target and exit. Default
-		is `false`
+
+RETURN VALUES:
+
+	A tuple, (testPredict, Δtest_norm, fptime), where testPredict is a matrix
+	with size numBus by numTestSamples, Δtest_norm is a number between 0 and 1
+	representing the final norm of (true - testPredict), and fptime is the time
+	for test set forward pass at the end of training.
 
 Note that there might not be enough memory on the GPU if not running on clusters,
 	in which case... you should probably find a GPU with enough memory to ensure
 	model is well trained. Anything with a 6GB VRAM or higher should
 	work.
 """
-function train_net(case::String, data::Array{Float32}, target::Array{Float32},
-			vm_mean_shift::Array{Float32}, T::Float64, λ::Float64, K1::Int64,
-			K2::Int64=0, lr::Float64=1e-3, epochs::Int64=500,
-			batch_size::Int64=32, retrain::Bool=false)
-
-	# separate out training + validation (80/20) set, and N \ T for "test set"
-	# also get the start and end indices of VA
-	L, N = size(data)  # L = numPQ * 4, N = num samples
-	va_end_idx = Int(L/2)  # will always be int, so no need to call round()
-	# vm_end_idx = Int(L/2)
-	trainSplit = round(Int32, N * T * 0.8)
-	valSplit = round(Int32, N * T)
-
-	trainData = data[:, 1:trainSplit] |> gpu
-	trainTarget = target[:, 1:trainSplit] |> gpu
-	valData = data[:, trainSplit+1:valSplit] |> gpu
-	valTarget = target[:, trainSplit+1:valSplit] |> gpu
-	testData = data[:, valSplit+1:end] |> gpu
-	testTarget = target[:, valSplit+1:end] |> gpu
-
-	opt = ADAM(lr)  # ADAM optimizer
-	# actfn(x) = leakyrelu(x, 0.05)
-	actfn = elu  # ELU activation function; seems to work better than ReLU/LeakyReLU
-
-	# network model: if K2 is nonzero, there are two hidden layers, otherwise 1
-	nlayers = 1  # number of hidden layer(s)
-	W1 = Dense(size(data)[1], K1, actfn)  # weight matrix 1
-	W2 = Dense(K1, size(target)[1]) # weight matrix 2
-	model = Chain(W1, W2) |> gpu # foward pass: ŷ = model(x)
-	if K2 != 0  # second hidden layer, optional
-		W2 = Dense(K1, K2, actfn)
-		W3 = Dense(K2, size(target)[1])
-		model = Chain(W1, W2, W3) |> gpu
-		nlayers = 2
+function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
+			nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
+			epochs::Int64=5, batch_size::Int64=32)
+	trainSplit = round(Int32, size(data, 2) * T * 0.8)
+	split_data = split_dataset(data, target, nn_type, T)
+	if split_data == Nothing
+		return ()
 	end
+	trainData = split_data[1] |> gpu
+	trainTarget = split_data[2] |> gpu
+	valData = split_data[3] |> gpu
+	valTarget = split_data[4] |> gpu
+	testData = split_data[5] |> gpu
+	testTarget = split_data[6] |> gpu
 
-	# println(model)
+	model = build_model(nn_type, size(trainData,1), size(trainTarget,1), K)
+	if model == Nothing
+		return ()
+	end
+	model = model |> gpu
 
-	######################## lambda functions start ############################
-	# loss function and "accuracy" measure
-	lossva(x, y) = λ * Flux.mse(model(x)[1:va_end_idx, :], y[1:va_end_idx, :])
-	lossvm(x, y) = Flux.mse(model(x)[va_end_idx+1:end, :], y[va_end_idx+1:end, :])
-	# lossvm(x, y) = mean(sum(abs.(model(x)[va_end_idx+1:end, :] - y[va_end_idx+1:end, :])))
-	loss(x, y) =  lossva(x, y) + lossvm(x, y)
+	opt = ADAM(lr)
+	loss(x, y) =  Flux.mse(model(x), y)
 
-	norm_va(x, y, end_idx::Int64) = norm((y - model(x))[1:end_idx, :])  # L2 norm of (AC - predict) va
-	norm_vm(x, y, start_idx::Int64) = norm((y - model(x))[start_idx:end, :])  # ... vm, :end because y only contains vm, va
-	Δ_va(x, y, end_idx::Int64, init::Float32) = norm_va(x, y, end_idx) / init  # current norm_va compared to initial value
-	Δ_vm(x, y, start_idx::Int64, init::Float32) = norm_vm(x, y, start_idx) / init  # ... vm
-	######################## lambda functions end ##############################
+	# "accuracy": norm and Δnorm (as percentage of initial, return as untracked
+	pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
+	Δpred_norm(x::AbstractArray, y::AbstractArray, init::Float32) = pred_norm(x, y) / init
 
-	# record loss/accuracy data for three sets
-	# println(va_end_idx)
-	init_test_va_norm = Tracker.data(norm_va(testData, testTarget, va_end_idx))
-	init_test_vm_norm = Tracker.data(norm_vm(testData, testTarget, va_end_idx+1))
-	init_val_va_norm = Tracker.data(norm_va(valData, valTarget, va_end_idx))  # for early stopping
-	init_val_vm_norm = Tracker.data(norm_vm(valData, valTarget, va_end_idx+1))
-	init_train_va_norm = Tracker.data(norm_va(trainData, trainTarget, va_end_idx))
-	init_train_vm_norm = Tracker.data(norm_vm(trainData, trainTarget, va_end_idx+1))
+	# record loss/accuracy data for three
+	init_train_norm = pred_norm(trainData, trainTarget)
+	init_val_norm = pred_norm(valData, valTarget)  # for early stopping
+	init_test_norm = pred_norm(testData, testTarget)
 
 	trainLoss, valLoss, = Float32[], Float32[]
 	epochTrainLoss, epochTrainErr = 0.0, 0.0
@@ -118,7 +202,6 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 
 	elapsedEpochs = 0
 	training_time = 0.0  # excludes early stop condition & checkpointing overhead
-	# earlyStopInd = Int16[]  # An indicator array, push an 1 if val loss increases
 
 	# train with mini batches; if batch_size = 0, train with full batch
 	randIdx = collect(1:1:trainSplit)
@@ -130,10 +213,10 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
     end
 
 	############################# training ##################################
-	train_va_norm = init_train_va_norm
+	train_norm = init_train_norm
 	last_improved_epoch, lr_count = 1, 0
 	for epoch = 1:epochs
-		# println("epoch: $epoch")
+		println("epoch: $epoch")
 		# record validation set loss/err values of current epoch
 		# before training so that we know the val loss/err in the beginning
 		push!(valLoss, Tracker.data(loss(valData, valTarget)))
@@ -142,7 +225,7 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		i = 1
 		time = Base.time()
 		for j = 1:numBatches
-			batchData = trainData[:, randIdx[i:i+batch_size]]
+			batchData = trainData[:,:,:, randIdx[i:i+batch_size]]
 			batchTarget = trainTarget[:, randIdx[i:i+batch_size]]
 			Flux.train!(loss, Flux.params(model), [(batchData, batchTarget)], opt)
 			# record training set loss every mini-batch
@@ -155,22 +238,22 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		training_time += Base.time() - time
 		elapsedEpochs = epoch
 
-		 # early stopping criteria, so put in test mode
-		if Δ_va(valData, valTarget, va_end_idx, init_val_va_norm) <= 0.005
+		 # stop training when validation set norm is 0.5% of the initial
+		if Δpred_norm(valData, valTarget, init_val_norm) <= 0.005
 			break
 		end
 
 		# lr decay: if train loss doesn't decrease for 5 consecutive epochs,
 		# otherwise update last improved epoch to be current epoch, and current
 		# train_va_norm which initially equals to init_train_va_norm
-		if Δ_va(trainData, trainTarget, va_end_idx, train_va_norm) < 1.
-			train_va_norm = Tracker.data(norm_va(trainData, trainTarget, va_end_idx))
+		if Δpred_norm(trainData, trainTarget, train_norm) < 1.
+			train_norm = pred_norm(trainData, trainTarget)
 			last_improved_epoch = epoch
 			lr_count = 0
 		elseif (epoch - last_improved_epoch) >= 5 && opt.eta >= 1e-8
 			opt.eta /= 10.0
 			@warn("No improvements for the last 5 epochs. Decreased lr to" *
-			 	" $(opt.eta) at epoch $epoch.")
+			 	" $(round(opt.eta, digits=5)) at epoch $epoch.")
 			last_improved_epoch = epoch
 			lr_count += 1
 		elseif lr_count == 3 || opt.eta <= 1e-9  # no improvements over 15 epoches or reached min lr
@@ -178,164 +261,224 @@ function train_net(case::String, data::Array{Float32}, target::Array{Float32},
 		end
 	end
 
-	# calculate change in test_vm, test_va compared to init_...
-	Δtest_va = Tracker.data(Δ_va(testData, testTarget, va_end_idx, init_test_va_norm))
-	Δtest_vm = Tracker.data(Δ_vm(testData, testTarget, va_end_idx+1, init_test_vm_norm))
-
-	Δtrain_va = Tracker.data(Δ_va(trainData, trainTarget, va_end_idx, init_train_va_norm))
-	Δtrain_vm = Tracker.data(Δ_vm(trainData, trainTarget, va_end_idx+1, init_train_vm_norm))
-
-	println("Test: Δvm = $Δtest_vm, Δva = $Δtest_va")
-	println("Train: Δvm = $Δtrain_vm, Δva = $Δtrain_va")
+	# calculate change in test norm compared to init
+	Δtest_norm = Δpred_norm(testData, testTarget, init_test_norm)
+	println(Δtest_norm)
 
 	# forward pass
 	time = Base.time()
 	testPredict = model(testData)
 	fptime = Base.time() - time
 
-	# save predicted vm (plus shifted mean), va values for N \ T
+	# get predicted values (untracked)
 	testPredict = cpu(Tracker.data(testPredict))
-	testPredict[va_end_idx+1:end, :] .+= vm_mean_shift[:, valSplit+1:end]
-	# testData = cpu(testData[vm_end_idx+1:end, :])  # PD, QD values
-	matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
-		"case_name" => case,
-		"T" => T,
-		"lambda" => λ,
-		"vpredict" => testPredict,
-	))  # save predicted
 
-	# save final model
-	model = cpu(model)
-	@save "$(case)_model_$(T)T_$(λ)λ.bson" model  # to get weights, use Tracker.data()
+	# save final model weights (untracked)
+	# model_weights = Flux.params(model)
+	BSON.@save "$(case)_model_$(T)T.bson" model
 
 	# save loss and accuracy data
-	matwrite("$(case)_loss_acc_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
+	matwrite("$(case)_loss_acc_$(T)T.mat", Dict{String, Any}(
 		"case_name" => case,
 		"T" => T,
-		"lambda" => λ,
 		"trainLoss" => trainLoss,
-		"valLoss" => valLoss,
+		"valLoss" => valLoss
 	))
-
-	# write result to file
-	trainlog = open("$(case)_train_output.log", "a")
-	println(trainlog, "Finished training after $elapsedEpochs epochs and $(round(
-			training_time, digits=5)) seconds")
-	println(trainlog, "Hyperparameters used: T = $T, λ = $λ, learning rate = $lr, "
-			* "batch_size = $batch_size, hidden layers = $nlayers")
-	println(trainlog, "Test set Results: ")
-	println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
-	println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_va*100)% of initial")
-	println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_vm*100)% of initial")
-	println(trainlog, "")  # new line
-	close(trainlog)
-	println("Total training performance:")
+	return (testPredict, Δtest_norm, (training_time, fptime, elapsedEpochs))
 end
 
 
 """
+	forward_pass(data::Array{Float32}, target::Array{Float32}, case::String,
+				nn_type::String, K::Int)
+
+Build model with untrained weights and load trained weights to model, then
+perform forward pass and save predicted values. By default, `split` which
+represents whether `data` are test set already split, is false. No `target`
+here because no training involved. Refer to `train_net` and `build_model` for
+arguement types and meanings.
+"""
+function forward_pass(data::Array{Float32}, model_name::String, nn_type::String,
+                T::Float64, K::Int64, split::Bool=false)
+	if !isfile("$(model_name).bson")
+		return false
+	end
+	trainlog = open("$(case)_train_output.log", "a")
+	println(trainlog, "Performing forward pass for $(split(model_name, "_")) at $(now())")
+
+	# build model with untrained weights
+	model = build_model(nn_type, size(data,1), size(target,1), K)
+	if model == "undef"
+		return (false,)
+	end
+
+	# load trained weights to model and send to GPU
+	@load "$(model_name).bson" weights
+	Flux.loadparams!(model, weights)
+	model = model |> gpu
+
+	# get the test set from data if split == false and send to GPU
+	if !split
+		data = data[:, round(Int, T*size(data,2))+1:end] |> gpu  # N \ T
+	else
+		data = data |> gpu
+	end
+
+	t = time()
+	predict = model(data)
+	println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
+			"$(round(time() - t, digits=5)) seconds")
+
+	predict = cpu(Tracker.data(predict))
+	close(trainlog)
+	return (true, predict)
+end
+
+
+"""
+	main(args::Array{String})
+
+Running in REPL:
+
+	1. default hyperparameters:
+		ex. main(["case30", "0.2", "conv", "Y", "Y"])
+	2. custom hyperparameters:
+		ex. main(["case30", "0.2", "conv", "Y", "Y", "5e-4", "30", "64"])
+
 Running on command line (assuming train.jl is in current directory):
 
-1. default hyperparameters:
-`/path/to/julia run_train.jl <case name> <train ratio> <λ>
+	1. default hyperparameters:
+	`/path/to/julia run_train.jl <case name> <train ratio> <nn_type>
+		<train separately Y/N> <retrain Y/N>`
+	2. custom hyperparameters (currently must be complete):
+	`/path/to/julia run_train.jl <case name> <train ratio> <nn_type>
+		<train separately Y/N> <retrain Y/N> <learning rate> <epochs> <batch size>`
 
-2. custom hyperparameters (currently must be complete):
-`/path/to/julia run_train.jl <case name> <train ratio> <λ> <retrain Y/N>
- 	<learning rate> <epochs <batch size>`
 TODO: accommodate vararg hyperparameter set
 """
-
 function main(args::Array{String})
 	error = false
 	case = args[1]  # case name, is String
-	if length(args) != 7 && length(args) != 3
-		println("Incorrect number of arguments provided. Expected 3 or 7, received $(length(args))")
+	if length(args) != 8 && length(args) != 5
+		@warn("Incorrect number of arguments provided. Expected 5 or 8, received $(length(args))")
 		error = true
-	elseif isfile("$(case)_dataset.mat") == false
-		println("$case dataset not found in current directory. Exiting...")
+	elseif !isfile("$(case)_dataset.mat")
+		@warn("$case dataset not found in current directory. Exiting...")
 		error = true
+	end
+	if error
+		return
 	end
 
-	if error == true
-		return Nothing
+	# parse other arguments
+	T = parse(Float64, args[2])  # ratio of training/val set (default = 0.2)
+	nn_type = args[3]  # is a string
+	separate = (args[4]=="Y" || args[4]=="y") ? true : false  # train two models, one each for vm, va
+	retrain = (args[5]=="Y" || args[5]=="y") ? true : false  # if model(s) already trained
+	default_param = true
+	if length(args) == 8
+		lr = parse(Float64, args[6])
+		epochs = parse(Int64, args[7])
+		bs = parse(Int64, args[8])
+		default_param = false
 	end
+
 	# load dataset from local directory
 	data = matread("$(case)_dataset.mat")["data"]
 	target = matread("$(case)_dataset.mat")["target"]
-	vm_mean_shift = matread("$(case)_dataset.mat")["diff"]
-	# # mean L2 norm of column wise ACVA - DCVA, ACVM - DCVM
-	# norm_va = matread("$(case)_perf_cs.mat")["norm_va"]
-	# norm_vm = matread("$(case)_perf_cs.mat")["norm_vm"]
-	@assert(size(data)[1] == size(target)[1])
-
-	println("Dataset loaded at $(now())")
-
-	# Float32 should decrease memory allocation demand and run much faster on
-	# non professional GPUs
-	if typeof(data) != Array{Float32, 2}
+	if typeof(data) != Array{Float32, 2}  # Float32 better on gaming cards
 		data = convert(Array{Float32}, data)
 	end
 	if typeof(target) != Array{Float32, 2}
 		target = convert(Array{Float32}, target)
 	end
-
-	# calculate hidden layer size(s) based on dataset feature size
-	K1 = round(Int, size(data)[1] * 2)
-	T = parse(Float64, args[2])
-	λ = parse(Float64, args[3])
-	default_param = true
-	if length(args) == 7
-		retrain = (args[4]=="Y" || args[2]=="y") ? true : false
-		lr = parse(Float64, args[5])
-		epochs = parse(Int64, args[6])
-		bs = parse(Int64, args[7])
-		default_param = false
-	end
-
-	# check if model is trained and does not need to be retrained
-	# if isfile("$(case)_model_$(T)T_$(λ)λ.bson") == true &&
-	# 		(default_param == true || retrain == false)
-	# 	trainlog = open("$(case)_train_output.log", "a")
-	# 	println(trainlog, "Model already trained! Performing forward pass...")
-	#
-	# 	# load model to GPU
-	# 	@load "$(case)_model_$(T)T_$(λ)λ.bson" model
-	# 	model = model |> gpu
-	# 	data = data[:, round(Int, T*size(data)[2])+1:end] |> gpu  # take N \ T for forward pass
-	#
-	# 	t = time()
-	# 	predict = model(data)
-	# 	println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
-	# 			"$(round(time() - t, digits=5)) seconds")
-	#
-	# 	# save predicted vm, va and the corresponding P, Q
-	# 	pq_idx = Int(size(data)[1] / 2)  # pq_idx+1:end = index range of P, Q features
-	# 	predict = cpu(Tracker.data(predict))
-	# 	data = cpu(data[pq_idx+1:end, :])
-	# 	matwrite("$(case)_predict_$(T)T_$(λ)lambda.mat", Dict{String, Any}(
-	# 		"case_name" => case,
-	# 		"T" => T,
-	# 		"lambda" => λ,
-	# 		"vpredict" => predict,
-	# 		"pq" => data
-	# 	))
-	# 	close(trainlog)
-	# 	println("Program finished at $(now()). Exiting...")
-	# 	return nothing
-    # end
+	println("Dataset loaded at $(now())")
 
 	trainlog = open("$(case)_train_output.log", "a")
 	println(trainlog, "Training a model for $case at $(now())...")
 	close(trainlog)
 
-	# train
-	if default_param == true
-		@time train_net(case, data, target, vm_mean_shift, T, λ, K1, K1)
-	else
-		@time train_net(case, data, target, vm_mean_shift, T, λ, K1, lr, epochs, bs, retrain)
+	# hidden layer size if nn_type is mlp, or 4 if ConvNet
+	K = (nn_type == "mlp") ? size(target, 1)*2 : 4
+	numBus = size(data, 1)
+
+	# if model already trained, try forward pass
+	if !retrain
+		success = false
+		if separate
+			ret_va = forward_pass(data, "$(case)_va_model_$(T)T.bson", nn_type, T, K)
+			ret_vm = forward_pass(data, "$(case)_vm_model_$(T)T.bson", nn_type, T, K)
+			success = ret_va[1] & ret_vm[1]
+			if success
+				save_predict(case, T, ret_va[2], ret_vm[2])
+				return
+			end
+		else
+			ret = forward_pass(data, "$(case)_model_$(T)T.bson", nn_type, T, K)
+			success = ret[1]
+			if success
+				save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
+				return
+			end
+		end
 	end
+
+	# training functions, will enter from forward pass above if unsuccessful
+	if separate
+		if default_param
+			@time ret_va = train_net(data, target[:,:,1], case*"_va", nn_type, T, K)
+			@time ret_vm = train_net(data, target[:,:,2], case*"_vm", nn_type, T, K)
+		else
+			@time ret_va = train_net(data, target[:,:,1], case*"_va", nn_type, T, K, lr, epochs, bs)
+			@time ret_vm = train_net(data, target[:,:,2], case*"_vm", nn_type, T, K, lr, epochs, bs)
+		end
+		if ret_va == () || ret_vm == ()  # build_model failed
+			@warn("build_model() failed, exiting at $(now())")
+			return
+		end
+		# save as .mat
+		save_predict(case, T, ret_va[1], ret_vm[1])
+		Δtest_norm_va = ret_va[2]
+		Δtest_norm_vm = ret_vm[2]
+		training_time = ret_va[3][1] + ret_vm[3][1]
+		fptime = ret_va[3][2] + ret_vm[3][2]  # total foward pass time
+	else
+		if default_param
+			@time ret = train_net(data, target, case, nn_type, T, K)
+		else
+			@time ret = train_net(data, target, case, nn_type, T, K, lr, epochs, bs)
+		end
+		if ret == ()  # build_model failed
+			@warn("build_model() failed, exiting at $(now())")
+			return
+		end
+		save_predict(case, T, ret[1][1:numBus, :], ret[1][numBus+1:end, :])
+		Δtest_norm = ret[2]
+		fptime = ret[3]
+	end
+
+	# write result to file
+	trainlog = open("$(case)_train_output.log", "a")
+	println(trainlog, "Finished training after $(round(training_time, digits=5)) seconds")
+	if default_param
+		println(trainlog, "Hyperparameters used: T = $T, learning rate = 1e-3, "
+			* "batch_size = 32")
+	else
+		println(trainlog, "Hyperparameters used: T = $T, learning rate = $lr, "
+			* "batch_size = $bs")
+	end
+	println(trainlog, "Test set Results: ")
+	println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
+	if separate
+		println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_norm_va*100)% of initial")
+		println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_norm_vm*100)% of initial")
+	else
+		println(trainlog, "  >> L2 norm of (true - predict) = $(Δtest_norm*100)% of initial")
+	end
+	println(trainlog, "")  # new line
+	close(trainlog)
+
 	println("Program finished at $(now()). Exiting...")
 end
 
-# main(ARGS)
-# main(["case30", "0.2", "5.0"])
+# main(ARGS)  # uncomment this when running remotely
