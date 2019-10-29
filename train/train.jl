@@ -19,7 +19,6 @@ Random.seed!(521)  # mini-batch shuffling
 using ForwardDiff
 CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Val{2}) = x*x
 
-
 """
     save_predict(case::String, T::Float64, va::Array{Float32}, vm::Array{Float32})
 Saves predicted results (va in degrees, vm .+ 1.0) and T value to .mat file
@@ -35,7 +34,7 @@ end
 
 
 """
-    build_model(type::String, Fx::Int64, Fy::Int64, K::Int64, large::Bool=false)
+    build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
 Returns the NN model: MLP with 2 hidden layers or 1D ConvNet
 
 ARGUMENTS:
@@ -48,7 +47,7 @@ ARGUMENTS:
 function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
     actfn = elu  # ELU activation function; seems to work better than ReLU/LeakyReLU
     if type == "mlp"
-        # Dense are fully connected layers, i.e. weight matrices connecting
+        # Dense() are fully connected layers, i.e. weight matrices connecting
         # in/output and hidden layers
         model = Chain(
             Dense(Fx, K, actfn),
@@ -56,23 +55,23 @@ function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
             Dense(K, Fy)
         )
     elseif type == "conv"
-        channel1 = 8
-        channel2 = 16
-        final_hidden = convert(Int32, Fy*channel2)
-        # W = 1, H = numBus (Fx)
+        # W = 1, H = numBus (Fx, if conv)
         # C = numChannel (maximum 4, va, vm, p, q), N = numSample
         # data needs to be in WHCN format (so conv filter is 1 by x)
+        channels = [8,8,8]
+        final_hidden = convert(Int32, Fy*channels[end])
 
         # for cases with more than 300 buses, first kernel length is 5 instead
         # of 3 for smaller cases
         if Fx > 300
-            conv1 = Conv((1,5), K=>channel1, pad=(0,2), actfn)
+            conv1 = Conv((1,5), K=>channels[1], pad=(0,2), actfn)
         else
-            conv1 = Conv((1,3), K=>channel1, pad=(0,1), actfn)
+            conv1 = Conv((1,3), K=>channels[1], pad=(0,1), actfn)
         end
         model = Chain(
             conv1,
-            Conv((1,3), channel1=>channel2, pad=(0,1), actfn),  # C = 16, H unchanged with 1 paddings
+            Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
+            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn), # H unchanged with 1 paddings
             x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
             Dense(final_hidden, Fy)
         )
@@ -90,11 +89,7 @@ end
 Separate out training + validation (80/20) set, and N-T for "test set"
 """
 function split_dataset(data::Array{Float32}, target::Array{Float32},
-            nn_type::String, T::Float64)
-    N = size(data, 2)
-    trainSplit = round(Int32, N * T * 0.8)
-    valSplit = round(Int32, N * T)
-
+            nn_type::String, trainSplit::Int64, valSplit::Int64)
     if nn_type == "mlp"  # flatten 3d data/target into 2d, [numBus * 4, N]
         data = vcat(data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4])
         if size(target,3) > 1  # if not trained separately
@@ -131,7 +126,7 @@ end
 """
     train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
-            epochs::Int64=500, bs::Int64=32)
+            epochs::Int64=1000, bs::Int64=32)
 Train an MLP/1D ConvNet with provided dataset. Saves trained model weights
 as well as the loss and accuracy data in current directory.
 
@@ -149,7 +144,7 @@ ARGUMENTS:
 OPTIONAL ARGUMENTS:
 
     lr: learning rate, default = 1e-3
-    epochs: default = 100
+    epochs: default = 1000
     bs: a positive integer, default 64
 
 RETURN VALUES:
@@ -165,8 +160,10 @@ Note that there might not be enough memory on the GPU if not running on clusters
 function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
             epochs::Int64=500, bs::Int64=32)
-    trainSplit = round(Int32, size(data, 2) * T * 0.8)
-    split_data = split_dataset(data, target, nn_type, T)
+    N = size(data, 2)
+    trainSplit = round(Int64, N * T * 0.9)
+    valSplit = round(Int64, N * T)
+    split_data = split_dataset(data, target, nn_type, trainSplit, valSplit)
     if split_data == Nothing
         return ()
     end
@@ -176,6 +173,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     valTarget = split_data[4] |> gpu
     testData = split_data[5] |> gpu
     testTarget = split_data[6] |> gpu
+    # @info("train $(size(trainData)) val $(size(valData)) test $(size(testData))")
 
     nn_type == "conv" ? Fx = size(trainData,2) : Fx = size(trainData,1)
     model = build_model(nn_type, Fx, size(trainTarget,1), K)
@@ -251,7 +249,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
 
          # stop training when validation set norm is 0.5% of the initial
         if Δpred_norm(valData, valTarget, init_val_norm) <= 0.001
-            @info("Validation set norm is 0.1% or lower than initial; training"*
+            @info("Validation set norm is 0.1% or lower than initial; training "*
                 "completed.")
             break
         end
@@ -277,7 +275,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     end
 
     if elapsedEpochs == epochs
-        @info("Max epochs of $epochs reached. Training stopped.")
+        @info("Training stopped at max epochs $epochs.")
     end
 
     # calculate change in test norm compared to init
@@ -327,7 +325,7 @@ function forward_pass(data::Array{Float32}, model_name::String, nn_type::String,
 
     # build model with untrained weights
     model = build_model(nn_type, size(data,1), size(target,1), K)
-    if model == "undef"
+    if model == Nothing
         return (false,)
     end
 
