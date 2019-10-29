@@ -3,7 +3,7 @@ function ac_hot(c, T)
     define_constants;
     c = char(c);
     mpc = loadcase(c);
-    fpredict = [c, '_predict_', T, 'T.mat'];
+    fpredict = [c, '_predict_T=', T, '.mat'];
     fdata = [c, '_dataset.mat'];
     
     if isfile(fpredict) && isfile(fdata)
@@ -56,7 +56,7 @@ function ac_hot(c, T)
         assert(length(et_ac) == numSample && length(itr_ac) == numSample);
         
         T_str = num2str(T);
-        fn = ['./results/', c, '_perf_hot_', T_str, 'T.mat'];
+        fn = ['./results/', c, '_perf_hot_T=', T, '.mat'];
         save(fn, 'itr_ac', 'et_ac', 'mismatch_hot')
         perf(c, 'hot', T_str);  % print performance
 

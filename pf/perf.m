@@ -2,7 +2,7 @@ function perf(case_str, mode, T)
     if mode == 'cold'
         load(['./results/', case_str, '_perf_cold.mat']);
     else 
-        load(['./results/', case_str, '_perf_hot_', T, 'T.mat']);
+        load(['./results/', case_str, '_perf_hot_T=', T, '.mat']);
     end
     
     et_ac_per_sample = stat(et_ac);
