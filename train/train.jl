@@ -263,12 +263,12 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             consec_decays_wo_imp = 0
         elseif (epoch - last_improved_epoch) >= 5 && opt.eta > 1e-9
             opt.eta /= 10.0
-            @warn("No improvements for the last 5 epochs. Decreased lr to" *
+            @info("No improvements for the last 5 epochs. Decreased lr to" *
                     " $(opt.eta) at epoch $epoch.")
             last_improved_epoch = epoch
             consec_decays_wo_imp += 1
         elseif consec_decays_wo_imp == 3 || opt.eta <= 1e-9
-            @warn("No improvements for the last 15 epoches or reached min lr" *
+            @info("No improvements for the last 15 epoches or reached min lr" *
                     " of 1e-9. Training stopped.")
             break
         end
