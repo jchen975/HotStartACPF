@@ -71,12 +71,12 @@ function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
         model = Chain(
             conv1,
             Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
-            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn), # H unchanged with 1 paddings
+            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),  # H unchanged with 1 padding
             x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
             Dense(final_hidden, Fy)
         )
     else
-        @warn("Type of NN unspecified.")
+        @warn("Type of NN unspecified. Failed to build model.")
         model = Nothing
     end
     return model
@@ -86,7 +86,7 @@ end
 """
     split_dataset(data::Array{Float32}, target::Array{Float32}, nn_type::String,
             T::Float64)
-Separate out training + validation (80/20) set, and N-T for "test set"
+Separate out training + validation set, and N ∖ T for "test set"
 """
 function split_dataset(data::Array{Float32}, target::Array{Float32},
             nn_type::String, trainSplit::Int64, valSplit::Int64)
@@ -116,7 +116,7 @@ function split_dataset(data::Array{Float32}, target::Array{Float32},
         testData = data[:, :, :, valSplit+1:end]
         testTarget = target[:, valSplit+1:end]
     else
-        @warn("Type of NN unspecified.")
+        @warn("Type of NN unspecified. Failed to split dataset.")
         return Nothing
     end
     return (trainData, trainTarget, valData, valTarget, testData, testTarget)
@@ -190,7 +190,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     close(trainlog)
 
     opt = ADAM(lr)
-    loss(x, y) =  Flux.mse(model(x), y)
+    loss(x, y) = norm(y - model(x)) # Flux.mse(model(x), y)
 
     # "accuracy": norm and Δnorm (as percentage of initial, return as untracked
     pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
@@ -229,7 +229,6 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         epochTrainLoss, epochTrainErr = 0.0, 0.0   # reset values
         Random.shuffle!(randIdx) # to shuffle training set
         i = 1
-
         for j = 1:numBatches
             # get batch data, target
             nn_type == "conv" ? batchX = trainData[:,:,:,randIdx[i:i+bs]] : batchX = trainData[:,randIdx[i:i+bs]]
@@ -247,10 +246,10 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         end
         elapsedEpochs = epoch
 
-         # stop training when validation set norm is 0.5% of the initial
-        if Δpred_norm(valData, valTarget, init_val_norm) <= 0.001
+        # stop training when validation set norm is 0.1% of the initial
+        if Δpred_norm(valData, valTarget, init_val_norm) <= 1e-3
             @info("Validation set norm is 0.1% or lower than initial; training "*
-                "completed.")
+                "completed at epoch $epoch.")
             break
         end
 
@@ -269,7 +268,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             consec_decays_wo_imp += 1
         elseif consec_decays_wo_imp == 3 || opt.eta <= 1e-9
             @info("No improvements for the last 15 epoches or reached min lr" *
-                    " of 1e-9. Training stopped.")
+                    " of 1e-9. Training stopped at epoch $epoch.")
             break
         end
     end
@@ -446,8 +445,10 @@ function main(args::Array{String})
             @time ret_va = train_net(data, target[:,:,1], case*"_va", nn_type, T, K)
             @time ret_vm = train_net(data, target[:,:,2], case*"_vm", nn_type, T, K)
         else
-            @time ret_va = train_net(data, target[:,:,1], case*"_va", nn_type, T, K, lr, epochs, bs)
-            @time ret_vm = train_net(data, target[:,:,2], case*"_vm", nn_type, T, K, lr, epochs, bs)
+            @time ret_va = train_net(data, target[:,:,1], case*"_va", nn_type,
+                                        T, K, lr, epochs, bs)
+            @time ret_vm = train_net(data, target[:,:,2], case*"_vm", nn_type,
+                                        T, K, lr, epochs, bs)
         end
         if ret_va == () || ret_vm == ()  # build_model failed
             @warn("build_model() failed, exiting at $(now())")
