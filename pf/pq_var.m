@@ -3,7 +3,7 @@ function [P, Q, Pp, Qp] = pq_var(str, numSample)
     rng(99);  % set rand seed
     mpc = loadcase(str);
     numBus = size(mpc.bus, 1);
-    
+
     %% generate PD variations on all PQ buses, i.e. BUS_TYPE == 1
     P = zeros([numBus, numSample], 'single');  % equivalent of Julia Float32
     for i = 1:numBus
@@ -20,26 +20,17 @@ function [P, Q, Pp, Qp] = pq_var(str, numSample)
     % truncated normal with mean = 1, std = 0.05 between [0.7, 1.0]
     pf_dist = makedist('Normal', 'mu', 1.0, 'sigma', 0.05);
     pf_dist = truncate(pf_dist, 0.7, 1.0);
-    pf_vec = random(pf_dist, 1, numSample);
-    pf = zeros(size(P), 'single');
-    for i = 1:numBus
-        pf(i, :) = pf_vec(randperm(numSample));  % randomly shuffle
-    end
-    
+    pf = random(pf_dist, numBus, numSample);
+
     % generate QD variations based on P and pf matrices
     Q = P .* tan(acos(pf));
     
-    % Keep PV buses PD, QD values as is
+    % Keep PV buses PD, QD values unchanged
     gen_idx = find(mpc.bus(:, BUS_TYPE) == PV);
     P(gen_idx, :) = repmat(mpc.bus(gen_idx, PD), 1, numSample);
     Q(gen_idx, :) = repmat(mpc.bus(gen_idx, QD), 1, numSample);
     
-    %% Calculate change in P, Q as percentage
-    % if Q_og(i) is 0, percentage is undefined, so set as 0, same for P
-    Q_og = mpc.bus(:, QD); 
-    Qp = (Q - Q_og) ./ Q_og;
-    Qp(Q_og == 0.0, :) = 0.0;
-    P_og = mpc.bus(:, PD);
-    Pp = (P - P_og) ./ P_og;
-    Pp(Q_og == 0.0, :) = 0.0;
+    %% Calculate change in P, Q in per unit
+    Qp = (Q - mpc.bus(:, QD)) / mpc.baseMVA; %./ Q_og;
+    Pp = (P - mpc.bus(:, PD)) / mpc.baseMVA; %./ P_og;
 end
