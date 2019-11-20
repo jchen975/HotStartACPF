@@ -1,7 +1,8 @@
 function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
     define_constants;
     mpc = loadcase(str);
-    
+    max_itr = 10;
+
     V_M = zeros(size(P), 'single');  % equivalent of Julia Float32
     V_A = zeros(size(P), 'single');
     
@@ -14,18 +15,22 @@ function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
     numSample = size(P, 2);
     itr_n = zeros(numSample, 1);  % number of iteration each sample
     itr_et = zeros(numSample, 1);  % iteration elapsed time
-    mismatch = zeros([10, numSample], 'single');  % N by itr matrix containing the PQ mismatch info
+    mismatch = zeros([max_itr, numSample], 'single');  % N by itr matrix containing the PQ mismatch info
     
     % arr for i-th failed NR
     fail = [];  % should preallocate for perf, but ret.et is the NR time so I don't care
     
     % run acpf numSample times
-    mpopt = mpoption('out.all', 0, 'verbose', 0, 'pf.tol', 1e-3);
+    tol = 1e-3;
+    mpopt = mpoption('out.all', 0, 'verbose', 0, 'pf.tol', tol, 'pf.nr.max_it', max_itr);
     for i = 1:numSample
         mpc.bus(:, PD) = P(:, i);
         mpc.bus(:, QD) = Q(:, i);
         mpc.bus(:, VM) = flat_vm;
         mpc.bus(:, VA) = flat_va;
+        if i == 602
+             fprintf("hi\n");
+        end
         ret = runpf(mpc, mpopt);
         if ret.success == 1
             V_M(:, i) = ret.bus(:, VM);
@@ -36,9 +41,6 @@ function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
         else
             fail = [fail, i];
         end
-    end
-    if length(fail) > 0
-        fprintf(' Number of failed samples: %i\n', length(fail));
     end
 %     assert(size(P, 2) == numSample && size(Q, 2) == numSample && size(V_M, 2) == numSample && size(V_A, 2) == numSample);
 %     assert(length(itr_et) == numSample && length(itr_n) == numSample);
