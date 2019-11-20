@@ -1,5 +1,6 @@
 *.asv
 *.log
+*.out
 *.mat
 *.jld2
 *.bson
