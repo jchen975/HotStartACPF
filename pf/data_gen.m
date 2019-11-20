@@ -2,7 +2,9 @@ function data_gen()
 %     case300: 8955/10000 failed
 %     case1354pegase: 38/10000 failed
 %     case13659pegase: 7550/10000 failed 
-    cases = ["case30", "case89pegase", "case118", "case145", "case2869pegase"];
+%     cases = ["case30", "case89pegase", "case118", "case145", "case2869pegase", "case3375wp"];
+%     cases = ["case300", "case1354pegase", "case13659pegase"];
+    cases = ["case13659pegase"];
     N = 10000;
 
     for c = cases
@@ -15,16 +17,22 @@ function data_gen()
         %% Error check and remove all failed sample columns, if they exist
         n_fail = length(fail);
         if n_fail ~= 0
+            fP = P(:, fail);
             P(:, fail) = [];
+            fQ = Q(:, fail);
             Q(:, fail) = [];
+            Pp(:, fail) = [];
+            Qp(:, fail) = [];
             ACVM(:, fail) = [];
             ACVA(:, fail) = [];
             DCVM(:, fail) = [];
             DCVA(:, fail) = [];
+            fmismatch = mismatch_cold(:, fail);
             mismatch_cold(:, fail) = [];
             itr_ac(fail) = [];
             et_ac(fail) = [];
             fprintf(' %i samples failed. Number of samples in dataset now: %i\n', n_fail, size(P, 2));
+            save(['./results/', c, '_failed.mat'], 'fP', 'fQ', 'fmismatch', 'fail');
         end
 
         %% form final dataset for case c and save to files
@@ -42,7 +50,7 @@ function data_gen()
         data(:, :, 4) = Qp;
         target = zeros([size(ACVM,1), size(ACVM,2), 2], 'single');
         target(:, :, 1) = ACVA;
-        target(:, :, 2) = ACVM;
+        target(:, :, 2) = ACVM;   
 
         save(['./results/', c, '_dataset.mat'], 'data', 'target', 'P', 'Q');
         save(['./results/', c, '_perf_cold.mat'], 'mismatch_cold', 'itr_ac', 'et_ac', 'et_dc', 'fail'); %, 'norm_va', 'norm_vm');

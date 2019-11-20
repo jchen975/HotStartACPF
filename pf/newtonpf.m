@@ -72,13 +72,14 @@ if mpopt.verbose > 1
     fprintf('\n----  ---------------------------');
     fprintf('\n%3d        %10.3e', i, normF);
 end
+% mismatch(i+1) = normF;
 if normF < tol
     converged = 1;
     if mpopt.verbose > 1
         fprintf('\nConverged!\n');
     end
 end
-mismatch(i+1) = normF;
+
 
 %% attempt to pick fastest linear solver, if not specified
 if isempty(lin_solver)
@@ -139,7 +140,8 @@ while (~converged && i < max_it)
             fprintf('\nNewton''s method power flow (power balance, polar) converged in %d iterations.\n', i);
         end
     end
-    mismatch(i+1) = normF;
+    mismatch(i) = normF;
+%     mismatch(i+1) = normF;
 end
 
 if mpopt.verbose
