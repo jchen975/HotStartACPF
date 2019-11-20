@@ -13,7 +13,7 @@ using BSON, MAT  # saving and loading files
 using BSON: @save, @load
 using Dates
 
-Random.seed!(521)  # mini-batch shuffling
+Random.seed!(7)  # mini-batch shuffling
 
 # Fix culiteral_pow() error; check later to see if fix is merged
 using ForwardDiff
@@ -173,7 +173,6 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     valTarget = split_data[4] |> gpu
     testData = split_data[5] |> gpu
     testTarget = split_data[6] |> gpu
-    # @info("train $(size(trainData)) val $(size(valData)) test $(size(testData))")
 
     nn_type == "conv" ? Fx = size(trainData,2) : Fx = size(trainData,1)
     model = build_model(nn_type, Fx, size(trainTarget,1), K)
@@ -190,7 +189,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     close(trainlog)
 
     opt = ADAM(lr)
-    loss(x, y) = norm(y - model(x)) # Flux.mse(model(x), y)
+    loss(x, y) = norm(y - model(x))  # Flux.mse(model(x), y)
 
     # "accuracy": norm and Δnorm (as percentage of initial, return as untracked
     pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
@@ -223,8 +222,8 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     train_norm = init_train_norm
     for epoch = 1:epochs
         # println("epoch: $epoch")
-        # record validation set loss/err values of current epoch
-        # before training so that we know the val loss in the beginning
+        # record validation set loss/err values of current epoch before training
+        # so that we know the val loss in the beginning
         push!(valLoss, Tracker.data(loss(valData, valTarget)))
         epochTrainLoss, epochTrainErr = 0.0, 0.0   # reset values
         Random.shuffle!(randIdx) # to shuffle training set
@@ -247,7 +246,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         elapsedEpochs = epoch
 
         # stop training when validation set norm is 0.1% of the initial
-        if Δpred_norm(valData, valTarget, init_val_norm) <= 1e-3
+        if Δpred_norm(valData, valTarget, init_val_norm) <= 1e-4
             @info("Validation set norm is 0.1% or lower than initial; training "*
                 "completed at epoch $epoch.")
             break
