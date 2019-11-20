@@ -3,8 +3,8 @@ function ac_hot(c, T)
     define_constants;
     c = char(c);
     mpc = loadcase(c);
-    fpredict = [c, '_predict_T=', T, '.mat'];
-    fdata = [c, '_dataset.mat'];
+    fpredict = ['./results/', c, '_predict_T=', T, '.mat'];
+    fdata = ['./results/', c, '_dataset.mat'];
     
     if isfile(fpredict) && isfile(fdata)
         % load predicted vm, va and the original P, Q
@@ -56,7 +56,7 @@ function ac_hot(c, T)
         assert(length(et_ac) == numSample && length(itr_ac) == numSample);
         
         T_str = num2str(T);
-        fn = ['./results/', c, '_perf_hot_T=', T, '.mat'];
+        fn = ['./results/', c, '_perf_hot_T=', T_str, '.mat'];
         save(fn, 'itr_ac', 'et_ac', 'mismatch_hot')
         perf(c, 'hot', T_str);  % print performance
 
