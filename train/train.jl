@@ -19,6 +19,7 @@ Random.seed!(7)  # mini-batch shuffling
 using ForwardDiff
 CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Val{2}) = x*x
 
+
 """
     save_predict(case::String, T::Float64, va::Array{Float32}, vm::Array{Float32})
 Saves predicted results (va in degrees, vm .+ 1.0) and T value to .mat file
@@ -89,7 +90,7 @@ end
 Separate out training + validation set, and N ∖ T for "test set"
 """
 function split_dataset(data::Array{Float32}, target::Array{Float32},
-            nn_type::String, trainSplit::Int64, valSplit::Int64)
+            nn_type::String, trainSplit::Int64, valSplit::Int64, failmode::Bool=false)
     if nn_type == "mlp"  # flatten 3d data/target into 2d, [numBus * 4, N]
         data = vcat(data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4])
         if size(target,3) > 1  # if not trained separately
@@ -99,8 +100,8 @@ function split_dataset(data::Array{Float32}, target::Array{Float32},
         trainTarget = target[:, 1:trainSplit]
         valData = data[:, trainSplit+1:valSplit]
         valTarget = target[:, trainSplit+1:valSplit]
-        testData = data[:, valSplit+1:end]
-        testTarget = target[:, valSplit+1:end]
+        !failmode ? testData = data[:, valSplit+1:end] : testData = Nothing
+        !failmode ? testTarget = target[:, valSplit+1:end] : testTarget = Nothing
     elseif nn_type == "conv"
         # data is currently (numBus, N, numFeature) == HNC, need to add W
         # axis and flip N and C to be WHCN, don't need to touch target
@@ -113,8 +114,8 @@ function split_dataset(data::Array{Float32}, target::Array{Float32},
         trainTarget = target[:, 1:trainSplit]  # remove last dimension (is 1)
         valData = data[:, :, :, trainSplit+1:valSplit]
         valTarget = target[:, trainSplit+1:valSplit]
-        testData = data[:, :, :, valSplit+1:end]
-        testTarget = target[:, valSplit+1:end]
+        !failmode ? testData = data[:, :, :, valSplit+1:end] : testData = Nothing
+        !failmode ? testTarget = target[:, valSplit+1:end] : testTarget = Nothing
     else
         @warn("Type of NN unspecified. Failed to split dataset.")
         return Nothing
@@ -163,7 +164,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     N = size(data, 2)
     trainSplit = round(Int64, N * T * 0.9)
     valSplit = round(Int64, N * T)
-    split_data = split_dataset(data, target, nn_type, trainSplit, valSplit)
+    split_data = split_dataset(data, target, nn_type, trainSplit, valSplit, (T==1.0))
     if split_data == Nothing
         return ()
     end
@@ -171,8 +172,13 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     trainTarget = split_data[2] |> gpu
     valData = split_data[3] |> gpu
     valTarget = split_data[4] |> gpu
-    testData = split_data[5] |> gpu
-    testTarget = split_data[6] |> gpu
+    if T < 1.0
+        testData = split_data[5] |> gpu
+        testTarget = split_data[6] |> gpu
+    else
+        @assert(testData == Nothing && testTarget == Nothing)
+        @assert(size(trainData[end] + size(valData)[end] == N))
+    end
 
     nn_type == "conv" ? Fx = size(trainData,2) : Fx = size(trainData,1)
     model = build_model(nn_type, Fx, size(trainTarget,1), K)
@@ -189,7 +195,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     close(trainlog)
 
     opt = ADAM(lr)
-    loss(x, y) = norm(y - model(x))  # Flux.mse(model(x), y)
+    loss(x, y) = norm(y - model(x)) + norm((y - model(x)), 1) # Flux.mse(model(x), y)
 
     # "accuracy": norm and Δnorm (as percentage of initial, return as untracked
     pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
@@ -198,9 +204,13 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     # record loss/accuracy data for three
     init_train_norm = pred_norm(trainData, trainTarget)
     init_val_norm = pred_norm(valData, valTarget)  # for early stopping
-    init_test_norm = pred_norm(testData, testTarget)
+    if T < 1.0
+        init_test_norm = pred_norm(testData, testTarget)
+    else
+        init_test_norm = 1e9
+    end
 
-    trainLoss, valLoss, = Float32[], Float32[]
+    trainLoss, valLoss = Float32[], Float32[]
     epochTrainLoss, epochTrainErr = 0.0, 0.0
     batchX, batchY = Nothing, Nothing
 
@@ -265,10 +275,10 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
                     " $(opt.eta) at epoch $epoch.")
             last_improved_epoch = epoch
             consec_decays_wo_imp += 1
-        elseif consec_decays_wo_imp == 3 || opt.eta <= 1e-9
-            @info("No improvements for the last 15 epoches or reached min lr" *
-                    " of 1e-9. Training stopped at epoch $epoch.")
-            break
+        # elseif consec_decays_wo_imp == 3 || opt.eta <= 1e-9
+        #     @info("No improvements for the last 15 epoches or reached min lr" *
+        #             " of 1e-9. Training stopped at epoch $epoch.")
+        #     break
         end
     end
 
@@ -276,17 +286,21 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         @info("Training stopped at max epochs $epochs.")
     end
 
-    # calculate change in test norm compared to init
-    Δtest_norm = Δpred_norm(testData, testTarget, init_test_norm)
-    println(Δtest_norm)
+    if T < 1.0
+        # calculate change in test norm compared to init
+        Δtest_norm = Δpred_norm(testData, testTarget, init_test_norm)
+        println(Δtest_norm)
 
-    # forward pass
-    time = Base.time()
-    testPredict = model(testData)
-    fptime = Base.time() - time
+        # forward pass
+        time = Base.time()
+        testPredict = model(testData)
+        fptime = Base.time() - time
 
-    # get predicted values (untracked)
-    testPredict = cpu(Tracker.data(testPredict))
+        # get predicted values (untracked)
+        testPredict = cpu(Tracker.data(testPredict))
+    else
+        testPredict, Δtest_norm = Nothing, Nothing
+    end
 
     # save final model weights (untracked)
     # model_weights = Flux.params(model)
@@ -304,8 +318,8 @@ end
 
 
 """
-    forward_pass(data::Array{Float32}, target::Array{Float32}, case::String,
-                nn_type::String, K::Int)
+    forward(data::Array{Float32}, model_name::String, nn_type::String,
+                T::Float64, K::Int64, split::Bool=false)
 
 Build model with untrained weights and load trained weights to model, then
 perform forward pass and save predicted values. By default, `split` which
@@ -313,7 +327,7 @@ represents whether `data` are test set already split, is false. No `target`
 here because no training involved. Refer to `train_net` and `build_model` for
 arguement types and meanings.
 """
-function forward_pass(data::Array{Float32}, model_name::String, nn_type::String,
+function forward(data::Array{Float32}, model_name::String, nn_type::String,
                 T::Float64, K::Int64, split::Bool=false)
     if !isfile("$(model_name).bson")
         return false
@@ -333,7 +347,7 @@ function forward_pass(data::Array{Float32}, model_name::String, nn_type::String,
     model = model |> gpu
 
     # get the test set from data if split == false and send to GPU
-    if !split
+    if !split && T < 1.0
         data = data[:, round(Int, T*size(data,2))+1:end] |> gpu  # N \ T
     else
         data = data |> gpu
@@ -341,12 +355,13 @@ function forward_pass(data::Array{Float32}, model_name::String, nn_type::String,
 
     t = time()
     predict = model(data)
+    fptime = time() - t
     println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
-            "$(round(time() - t, digits=5)) seconds")
+            "$(round(fptime, digits=5)) seconds")
 
     predict = cpu(Tracker.data(predict))
     close(trainlog)
-    return (true, predict)
+    return (true, predict, fptime)
 end
 
 
@@ -421,15 +436,15 @@ function main(args::Array{String})
     if !retrain
         success = false
         if separate
-            ret_va = forward_pass(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K)
-            ret_vm = forward_pass(data, "$(case)_vm_model_T=$(T).bson", nn_type, T, K)
+            ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K)
+            ret_vm = forward(data, "$(case)_vm_model_T=$(T).bson", nn_type, T, K)
             success = ret_va[1] & ret_vm[1]
             if success
                 save_predict(case, T, ret_va[2], ret_vm[2])
                 return
             end
         else
-            ret = forward_pass(data, "$(case)_model_T=$(T).bson", nn_type, T, K)
+            ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K)
             success = ret[1]
             if success
                 save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
@@ -453,12 +468,15 @@ function main(args::Array{String})
             @warn("build_model() failed, exiting at $(now())")
             return
         end
-        # save as .mat
-        save_predict(case, T, ret_va[1], ret_vm[1])
-        Δtest_norm_va = ret_va[2]
-        Δtest_norm_vm = ret_vm[2]
+        if T < 1.0
+            # save as .mat
+            save_predict(case, T, ret_va[1], ret_vm[1])
+            Δtest_norm_va = ret_va[2]
+            Δtest_norm_vm = ret_vm[2]
+            fptime = ret_va[3][2] + ret_vm[3][2]  # total foward pass time
+        end
         training_time = ret_va[3][1] + ret_vm[3][1]
-        fptime = ret_va[3][2] + ret_vm[3][2]  # total foward pass time
+
     else
         if default_param
             @time ret = train_net(data, target, case, nn_type, T, K)
@@ -469,9 +487,27 @@ function main(args::Array{String})
             @warn("build_model() failed, exiting at $(now())")
             return
         end
-        save_predict(case, T, ret[1][1:numBus, :], ret[1][numBus+1:end, :])
-        Δtest_norm = ret[2]
-        fptime = ret[3]
+        if T < 1.0
+            save_predict(case, T, ret[1][1:numBus, :], ret[1][numBus+1:end, :])
+            Δtest_norm = ret[2]
+            fptime = ret[3][2]
+        end
+        training_time = ret[3][1]
+    end
+
+    # "test set" are samples that failed to converge in cold-start
+    if T == 1.0
+        data = matread("$(case)_failed.mat")["fdata"]
+        ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
+        ret_vm = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
+        success = ret_va[1] & ret_vm[1]
+        if success
+            save_predict(case, T, ret_va[2], ret_vm[2])
+            fptime = ret_va[3] + ret_vm[3]
+        else
+            @warn("Predicting failed cold-start samples not successful.")
+            fptime = 0
+        end
     end
 
     # write result to file
@@ -484,18 +520,23 @@ function main(args::Array{String})
         println(trainlog, "Hyperparameters used: T = $T, learning rate = $lr, "
             * "bs = $bs")
     end
-    println(trainlog, "Test set Results: ")
-    println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
-    if separate
-        println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_norm_va*100)% of initial")
-        println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_norm_vm*100)% of initial")
+    if T < 1.0
+        println(trainlog, "Test set results: ")
+        println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
+        if separate
+            println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_norm_va*100)% of initial")
+            println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_norm_vm*100)% of initial")
+        else
+            println(trainlog, "  >> L2 norm of (true - predict) = $(Δtest_norm*100)% of initial")
+        end
     else
-        println(trainlog, "  >> L2 norm of (true - predict) = $(Δtest_norm*100)% of initial")
+        println(trainlog, "Test set results (prediction for failed to converge samples only):")
+        println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
     end
     println(trainlog, "")  # new line
     close(trainlog)
 
-    println("Program finished at $(now()). Exiting...")
+    @info("Program finished at $(now()). Exiting...")
 end
 
-# main(ARGS)  # uncomment this when running remotely
+main(ARGS)  # uncomment this when running on command line
