@@ -12,20 +12,32 @@ nvidia-smi --query-gpu=name --format=csv | grep -v "name" >> run_train.log
 echo >> run_train.log
 echo "------------------------------------------------------------------------" >> run_train.log
 
-module load gcc/7.3.0 julia/1.1.1 cuda/10.0.130 cudnn/7.5 # enable julia, CUDA
+module load nixpkgs/16.09 gcc/7.3.0 cuda/10.0.130 cudnn/7.6 julia/1.2.0 # enable julia, CUDA
 
-# From run_train.jl:
-# Running on command line (assuming train.jl is in current directory):
-# julia run_train.jl <case name> <second hidden layer Y/N> <retrain Y/N> <learning rate> <epochs> <batch size>`
-# julia run_train.jl <case name> -d
+export LD_LIBRARY_PATH="${EBROOTCUDA}/lib64:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${EBROOTCUDNN}/lib64:${LD_LIBRARY_PATH}"
 
-casefiles=("case30" "case118" "case300" "case2869")
+# julia cudatest.jl >> run_train.log
+# julia train.jl "case30" "0.2" "conv" "Y" "Y" >> run_train.log
+julia train.jl "case118" "0.1" "conv" "Y" "Y" >> run_train.log 2>&1
+# julia train.jl "case2869pegase" "0.2" "conv" "Y" "Y" >> run_train.log
 
-for case in ${casefiles[*]}
-do
-    echo ">> Training model for $case at $(date)" >> run_train.log
-    julia run_train.jl "$case" -d >> run_train.log
-done
+# casefiles=("case30" "case89pegase" "case145" "case118" "case145" "case2869pegase");
+# T=("0.1" "0.15" "0.2" "0.25" "0.3");
+# Lambda=("1.0" "2.5" "5.0" "7.5" "10.0");
+#
+# for case in ${casefiles[*]}
+# do
+#     echo "********* Training models for $case at $(date) **********" >> run_train.log
+#     for t in ${T[*]}
+#     do
+#         for l in ${Lambda[*]}
+#         do
+#             echo "  >> T = $t, lambda = $l"  >> run_train.log
+#             # julia train.jl "$case" "$t" "" >> run_train.log
+#         done
+#     done
+# done
 
 echo "------------------------------------------------------------------------" >> run_train.log
 echo >> run_train.log
