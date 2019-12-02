@@ -17,27 +17,25 @@ module load nixpkgs/16.09 gcc/7.3.0 cuda/10.0.130 cudnn/7.6 julia/1.2.0 # enable
 export LD_LIBRARY_PATH="${EBROOTCUDA}/lib64:${LD_LIBRARY_PATH}"
 export LD_LIBRARY_PATH="${EBROOTCUDNN}/lib64:${LD_LIBRARY_PATH}"
 
-# julia cudatest.jl >> run_train.log
-# julia train.jl "case30" "0.2" "conv" "Y" "Y" >> run_train.log
-julia train.jl "case118" "0.1" "conv" "Y" "Y" >> run_train.log 2>&1
-# julia train.jl "case2869pegase" "0.2" "conv" "Y" "Y" >> run_train.log
-
-# casefiles=("case30" "case89pegase" "case145" "case118" "case145" "case2869pegase");
+# casefiles=("case30" "case118");
 # T=("0.1" "0.15" "0.2" "0.25" "0.3");
-# Lambda=("1.0" "2.5" "5.0" "7.5" "10.0");
-#
-# for case in ${casefiles[*]}
+# for c in ${casefiles[*]}
 # do
-#     echo "********* Training models for $case at $(date) **********" >> run_train.log
 #     for t in ${T[*]}
 #     do
-#         for l in ${Lambda[*]}
-#         do
-#             echo "  >> T = $t, lambda = $l"  >> run_train.log
-#             # julia train.jl "$case" "$t" "" >> run_train.log
-#         done
+#         echo ">> T = $t"  >> run_train.log 2>&1
+#         julia train.jl "$c" "$t" "conv" "Y" "Y" >> run_train.log 2>&1
 #     done
 # done
+
+
+T2=("0.2" "0.3" "0.4" "0.5" "0.6" "0.7" "0.8")
+for t in ${T2[*]}
+do
+    echo ">> T = $t"  >> run_train.log 2>&1
+    julia train.jl "case2869pegase" "$t" "conv" "Y" "Y" >> run_train.log 2>&1
+done
+
 
 echo "------------------------------------------------------------------------" >> run_train.log
 echo >> run_train.log
