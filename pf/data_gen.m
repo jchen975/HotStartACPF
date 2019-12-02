@@ -2,10 +2,10 @@ function data_gen()
 %     case300: 8955/10000 failed
 %     case1354pegase: 38/10000 failed
 %     case13659pegase: 7550/10000 failed 
-%     cases = ["case30", "case89pegase", "case118", "case145", "case2869pegase", "case3375wp"];
-%     cases = ["case300", "case1354pegase", "case13659pegase"];
-    cases = ["case13659pegase"];
-    N = 10000;
+%     cases = ["case30", "case118", "case2869pegase"]; %, "case3375wp"];
+    cases = ["case300", "case13659pegase"];
+%     cases = ["case2869pegase"];
+    N = 100000;
 
     for c = cases
         %% PF based on PQ variations
@@ -15,24 +15,36 @@ function data_gen()
         [ACVM, ACVA, et_ac, itr_ac, fail, mismatch_cold] = ac_cold(c, P, Q);
 
         %% Error check and remove all failed sample columns, if they exist
+        % move failed P, Q (in per unit difference) and DC vm, va results
+        % to 'fTest', which has the same (numBus, nChannel) dimension as 
+        % training/val set, which contains **all** the successful samples
         n_fail = length(fail);
         if n_fail ~= 0
             fP = P(:, fail);
             P(:, fail) = [];
             fQ = Q(:, fail);
             Q(:, fail) = [];
+            fPp = Pp(:, fail);
             Pp(:, fail) = [];
+            fQp = Qp(:, fail);
             Qp(:, fail) = [];
             ACVM(:, fail) = [];
             ACVA(:, fail) = [];
+            fDCVM = DCVM(:, fail);
             DCVM(:, fail) = [];
+            fDCVA = DCVA(:, fail);
             DCVA(:, fail) = [];
             fmismatch = mismatch_cold(:, fail);
             mismatch_cold(:, fail) = [];
             itr_ac(fail) = [];
             et_ac(fail) = [];
             fprintf(' %i samples failed. Number of samples in dataset now: %i\n', n_fail, size(P, 2));
-            save(['./results/', c, '_failed.mat'], 'fP', 'fQ', 'fmismatch', 'fail');
+            fdata = zeros([size(fDCVM,1), size(fDCVM,2), 4], 'single');
+            fdata(:, :, 1) = fDCVA;
+            fdata(:, :, 2) = fDCVM;  % include this for PV bus vm
+            fdata(:, :, 3) = fPp;
+            fdata(:, :, 4) = fQp;
+            save(['./results/', c, '_failed.mat'], 'fP', 'fQ', 'fdata', 'fmismatch', 'fail');
         end
 
         %% form final dataset for case c and save to files
