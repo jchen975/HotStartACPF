@@ -31,6 +31,6 @@ function [P, Q, Pp, Qp] = pq_var(str, numSample)
     Q(gen_idx, :) = repmat(mpc.bus(gen_idx, QD), 1, numSample);
     
     %% Calculate change in P, Q in per unit
-    Qp = (Q - mpc.bus(:, QD)) / mpc.baseMVA; %./ Q_og;
-    Pp = (P - mpc.bus(:, PD)) / mpc.baseMVA; %./ P_og;
+    Qp = (Q - mpc.bus(:, QD)) / mpc.baseMVA; 
+    Pp = (P - mpc.bus(:, PD)) / mpc.baseMVA; 
 end
