@@ -11,19 +11,12 @@ function ac_hot(c, T)
         load(fpredict);
         load(fdata);
 
-%         numBus = size(mpc.bus, 1); 
         N = size(P, 2);
         numSample = int32((1-T)*N);  % N \ T
 
         P = P(:, (N-numSample+1):end);
         Q = Q(:, (N-numSample+1):end);
-        
-%         % flat start vm = 1 except PV bus, all va = 0
-%         gen_idx = find(mpc.bus(:, BUS_TYPE) == PV);
-%         flat_vm = ones(size(V_M, 1), 1, 'single');  
-%         flat_vm(gen_idx, :) = mpc.bus(gen_idx, VM);
-%         flat_va = zeros(size(flat_vm), 'single');
-        
+      
         max_itr = 10;
         itr_ac = zeros(numSample, 1);  % number of iteration each sample
         et_ac = zeros(numSample, 1);  % iteration elapsed time
@@ -37,8 +30,8 @@ function ac_hot(c, T)
         for i = 1:numSample
             mpc.bus(:, PD) = P(:, i);
             mpc.bus(:, QD) = Q(:, i);
-            mpc.bus(:, VM) = V_M(:, i);
-            mpc.bus(:, VA) = V_A(:, i);
+            mpc.bus(:, VM) = V_M(:, i); 
+            mpc.bus(:, VA) = V_A(:, i); 
  
             ret = runpf(mpc, mpopt);
             if ret.success == 1
@@ -61,7 +54,7 @@ function ac_hot(c, T)
         perf(c, 'hot', T_str);  % print performance
 
     else
-        fprintf(' File "%s" or the corresponding PQ data does not exist.\n', [c, '_predict_', T, 'T.mat']);
+        fprintf(' File "%s" or the corresponding PQ data does not exist.\n', [c, '_predict_T=', T, '.mat']);
         fprintf(' Current directory: %s\n', pwd);
     end
 end
