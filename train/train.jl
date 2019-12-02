@@ -4,7 +4,7 @@ We assume there is CUDA hardware; if error(s) are reported, comment it out and
 `|> gpu` will be no-ops
 """
 
-using CuArrays, Flux  # GPU, ML libraries
+using CUDAdrv, CuArrays, Flux  # GPU, ML libraries
 using Flux.Optimise: ADAM
 using Statistics # to use mean()
 using Random  # shuffling for mini batch; not setting a random seed here
@@ -18,6 +18,10 @@ Random.seed!(7)  # mini-batch shuffling
 # Fix culiteral_pow() error; check later to see if fix is merged
 using ForwardDiff
 CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Val{2}) = x*x
+
+# GPU memory utilization rate
+gpu_mem_util() = @info("GPU memory utilization rate: " *
+        "$(round((CUDAdrv.available_memory() / CUDAdrv.total_memory()); digits=3)*100)%")
 
 
 """
@@ -59,23 +63,30 @@ function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
         # W = 1, H = numBus (Fx, if conv)
         # C = numChannel (maximum 4, va, vm, p, q), N = numSample
         # data needs to be in WHCN format (so conv filter is 1 by x)
-        channels = [8,8,8]
+        channels = [8,8,8,8,8]
         final_hidden = convert(Int32, Fy*channels[end])
 
-        # for cases with more than 300 buses, first kernel length is 5 instead
+        # for cases with more than 300 buses, first kernel length is 7 instead
         # of 3 for smaller cases
-        if Fx > 300
-            conv1 = Conv((1,5), K=>channels[1], pad=(0,2), actfn)
+        if Fx <= 300
+			model = Chain(
+	            Conv((1,3), K=>channels[1], pad=(0,1), actfn),
+	            Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
+	            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
+				x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
+	            Dense(final_hidden, Fy)
+			)
         else
-            conv1 = Conv((1,3), K=>channels[1], pad=(0,1), actfn)
+			model = Chain(
+				Conv((1,7), K=>channels[1], pad=(0,3), actfn),
+				Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
+	            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
+				Conv((1,3), channels[3]=>channels[4], pad=(0,1), actfn),
+		    	Conv((1,3), channels[4]=>channels[5], pad=(0,1), actfn),
+		    	x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
+	            Dense(final_hidden, Fy)
+			)
         end
-        model = Chain(
-            conv1,
-            Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
-            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),  # H unchanged with 1 padding
-            x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
-            Dense(final_hidden, Fy)
-        )
     else
         @warn("Type of NN unspecified. Failed to build model.")
         model = Nothing
@@ -146,7 +157,7 @@ OPTIONAL ARGUMENTS:
 
     lr: learning rate, default = 1e-3
     epochs: default = 1000
-    bs: a positive integer, default 64
+    bs: a positive integer, default 32
 
 RETURN VALUES:
 
@@ -155,8 +166,6 @@ RETURN VALUES:
     representing the final norm of (true - testPredict), and fptime is the time
     for test set forward pass at the end of training.
 
-Note that there might not be enough memory on the GPU if not running on clusters,
-    but anything with a 6GB VRAM or higher should work. Ideally more though.
 """
 function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
@@ -176,8 +185,8 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         testData = split_data[5] |> gpu
         testTarget = split_data[6] |> gpu
     else
-        @assert(testData == Nothing && testTarget == Nothing)
-        @assert(size(trainData[end] + size(valData)[end] == N))
+        @assert(split_data[5] == Nothing && split_data[6] == Nothing)
+        @assert(size(trainData)[end] + size(valData)[end] == N)
     end
 
     nn_type == "conv" ? Fx = size(trainData,2) : Fx = size(trainData,1)
@@ -195,7 +204,16 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     close(trainlog)
 
     opt = ADAM(lr)
-    loss(x, y) = norm(y - model(x)) + norm((y - model(x)), 1) # Flux.mse(model(x), y)
+    loss(x, y) = norm(y - model(x))  # Flux.mse(model(x), y)
+	# function loss(x, y)  # berHu loss
+	#     x = model(x)
+	#     println(typeof(x), ",", typeof(y))
+	#     bound = 0.2*maximum(abs.(x-y))
+	#     @warn("bound = $bound")
+	#     inbound = abs.(x-y) .<= bound
+	#     l = sum(inbound .* norm.((x-y), 1) + .!inbound .* (sum((x-y).^2 .+ bound^2)/(2*bound))) / (size(y,1)*size(y,2))
+	#     return l
+	# end
 
     # "accuracy": norm and Δnorm (as percentage of initial, return as untracked
     pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
@@ -255,6 +273,8 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         end
         elapsedEpochs = epoch
 
+        epoch % 50 == 0 && gpu_mem_util()
+
         # stop training when validation set norm is 0.1% of the initial
         if Δpred_norm(valData, valTarget, init_val_norm) <= 1e-4
             @info("Validation set norm is 0.1% or lower than initial; training "*
@@ -289,7 +309,6 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     if T < 1.0
         # calculate change in test norm compared to init
         Δtest_norm = Δpred_norm(testData, testTarget, init_test_norm)
-        println(Δtest_norm)
 
         # forward pass
         time = Base.time()
@@ -299,11 +318,12 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         # get predicted values (untracked)
         testPredict = cpu(Tracker.data(testPredict))
     else
-        testPredict, Δtest_norm = Nothing, Nothing
+        testPredict, Δtest_norm, fptime = Nothing, Nothing, Nothing
     end
 
     # save final model weights (untracked)
     # model_weights = Flux.params(model)
+	model = cpu(model)
     BSON.@save "$(case)_model_T=$(T).bson" model
 
     # save loss and accuracy data
@@ -319,7 +339,7 @@ end
 
 """
     forward(data::Array{Float32}, model_name::String, nn_type::String,
-                T::Float64, K::Int64, split::Bool=false)
+                T::Float64, K::Int64, is_test::Bool=false)
 
 Build model with untrained weights and load trained weights to model, then
 perform forward pass and save predicted values. By default, `split` which
@@ -328,27 +348,37 @@ here because no training involved. Refer to `train_net` and `build_model` for
 arguement types and meanings.
 """
 function forward(data::Array{Float32}, model_name::String, nn_type::String,
-                T::Float64, K::Int64, split::Bool=false)
-    if !isfile("$(model_name).bson")
+                T::Float64, K::Int64, is_test::Bool=false)
+    if !isfile("$(model_name)")
+		@warn("Did not find a trained model with name `$(model_name)`")
         return false
     end
+	case = split(model_name, "_")[1]
     trainlog = open("$(case)_train_output.log", "a")
-    println(trainlog, "Performing forward pass for $(split(model_name, "_")) at $(now())")
+    println(trainlog, "Performing forward pass for $(case) at $(now())")
 
     # build model with untrained weights
-    model = build_model(nn_type, size(data,1), size(target,1), K)
-    if model == Nothing
-        return (false,)
-    end
-
-    # load trained weights to model and send to GPU
-    @load "$(model_name).bson" weights
-    Flux.loadparams!(model, weights)
+	numBus, numSample = size(data)
+	if nn_type == "conv"
+		data = permutedims(data, [1,3,2])
+        data = reshape(data, (1, size(data,1), size(data,2), size(data,3)))
+	end
+	############## should be saving and loading model weights ###############
+    # model = build_model(nn_type, numBus, numBus, K)
+    # if model == Nothing
+    #     return (false,)
+    # end
+	#
+    # # load trained weights to model and send to GPU
+    # @load "$(model_name)" weights
+    # Flux.loadparams!(model, weights)
+	########################################################################
+	@load "$(model_name)" model
     model = model |> gpu
 
-    # get the test set from data if split == false and send to GPU
-    if !split && T < 1.0
-        data = data[:, round(Int, T*size(data,2))+1:end] |> gpu  # N \ T
+    # get the test set from data if is_test == false and send to GPU
+    if !is_test && T < 1.0
+        data = data[:, round(Int, T*numSample)+1:end] |> gpu  # N \ T
     else
         data = data |> gpu
     end
@@ -356,11 +386,11 @@ function forward(data::Array{Float32}, model_name::String, nn_type::String,
     t = time()
     predict = model(data)
     fptime = time() - t
-    println(trainlog, "Forward pass with $(size(data)[2]) samples took " *
-            "$(round(fptime, digits=5)) seconds")
+    println(trainlog, "Forward pass with $(numSample) samples took " *
+            "$(round(fptime; digits=5)) seconds")
+	close(trainlog)
 
     predict = cpu(Tracker.data(predict))
-    close(trainlog)
     return (true, predict, fptime)
 end
 
@@ -422,7 +452,7 @@ function main(args::Array{String})
     if typeof(target) != Array{Float32, 2}
         target = convert(Array{Float32}, target)
     end
-    println("Dataset loaded at $(now())")
+    @info("Dataset loaded at $(now())")
 
     trainlog = open("$(case)_train_output.log", "a")
     println(trainlog, "Training a $nn_type model for $case at $(now())...")
@@ -435,6 +465,10 @@ function main(args::Array{String})
     # if model already trained, try forward pass
     if !retrain
         success = false
+		if T == 1.0
+			data = matread("$(case)_failed.mat")["fdata"]
+			@info("Forward pass for failed to converge samples based on models trained previously")
+		end
         if separate
             ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K)
             ret_vm = forward(data, "$(case)_vm_model_T=$(T).bson", nn_type, T, K)
@@ -442,15 +476,19 @@ function main(args::Array{String})
             if success
                 save_predict(case, T, ret_va[2], ret_vm[2])
                 return
-            end
+			end
+			@info("va $(ret_va[1]), vm $(ret_vm[1])")
+			@warn("Forward pass not successful.")
         else
             ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K)
             success = ret[1]
             if success
                 save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
                 return
-            end
+			end
+			@warn("Forward pass not successful.")
         end
+		return
     end
 
     # training functions, will enter from forward pass above if unsuccessful
@@ -497,9 +535,10 @@ function main(args::Array{String})
 
     # "test set" are samples that failed to converge in cold-start
     if T == 1.0
-        data = matread("$(case)_failed.mat")["fdata"]
-        ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
-        ret_vm = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
+		@info("Forward pass for failed to converge samples based on models trained just now")
+        fdata = matread("$(case)_failed.mat")["fdata"]
+        ret_va = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
+        ret_vm = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
         success = ret_va[1] & ret_vm[1]
         if success
             save_predict(case, T, ret_va[2], ret_vm[2])
@@ -512,7 +551,7 @@ function main(args::Array{String})
 
     # write result to file
     trainlog = open("$(case)_train_output.log", "a")
-    println(trainlog, "Finished training after $(round(training_time, digits=5)) seconds")
+    println(trainlog, "Finished training after $(round(training_time; digits=5)) seconds")
     if default_param
         println(trainlog, "Hyperparameters used: T = $T, learning rate = 1e-3, "
             * "bs = 32")
@@ -522,7 +561,7 @@ function main(args::Array{String})
     end
     if T < 1.0
         println(trainlog, "Test set results: ")
-        println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
+        println(trainlog, "  >> Forward pass: $(round(fptime; digits=7)) seconds")
         if separate
             println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_norm_va*100)% of initial")
             println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_norm_vm*100)% of initial")
@@ -531,7 +570,7 @@ function main(args::Array{String})
         end
     else
         println(trainlog, "Test set results (prediction for failed to converge samples only):")
-        println(trainlog, "  >> Forward pass: $(round(fptime, digits=7)) seconds")
+        println(trainlog, "  >> Forward pass: $(round(fptime; digits=7)) seconds")
     end
     println(trainlog, "")  # new line
     close(trainlog)
