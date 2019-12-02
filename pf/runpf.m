@@ -276,7 +276,7 @@ if ~isempty(mpc.bus)
                     [bus, gen, branch] = pfsoln(baseMVA, bus, gen, branch, Ybus, Yf, Yt, V, ref, pv, pq, mpopt);
                 case {'PQSUM', 'ISUM', 'YSUM'}
                     bus = mpc.bus;
-                    gen = mpc.gen;
+                       gen = mpc.gen;
                     branch = mpc.branch;
             end
 
