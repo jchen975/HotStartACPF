@@ -8,7 +8,7 @@ function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
     
     % flat start vm = 1 except PV bus, all va = 0
     gen_idx = find(mpc.bus(:, BUS_TYPE) == PV);
-    flat_vm = ones(size(V_M, 1), 1, 'single');  
+    flat_vm = ones(size(V_M, 1), 1, 'single');   
     flat_vm(gen_idx, :) = mpc.bus(gen_idx, VM);
     flat_va = zeros(size(flat_vm), 'single');
     
@@ -28,21 +28,15 @@ function [V_M, V_A, itr_et, itr_n, fail, mismatch] = ac_cold(str, P, Q)
         mpc.bus(:, QD) = Q(:, i);
         mpc.bus(:, VM) = flat_vm;
         mpc.bus(:, VA) = flat_va;
-        if i == 602
-             fprintf("hi\n");
-        end
         ret = runpf(mpc, mpopt);
         if ret.success == 1
             V_M(:, i) = ret.bus(:, VM);
             V_A(:, i) = ret.bus(:, VA);
-            mismatch(:, i) = ret.mismatch;
             itr_n(i) = ret.iterations;
             itr_et(i) = ret.et;            
         else
             fail = [fail, i];
         end
+        mismatch(:, i) = ret.mismatch;
     end
-%     assert(size(P, 2) == numSample && size(Q, 2) == numSample && size(V_M, 2) == numSample && size(V_A, 2) == numSample);
-%     assert(length(itr_et) == numSample && length(itr_n) == numSample);
-    
 end
