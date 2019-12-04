@@ -24,7 +24,7 @@ export LD_LIBRARY_PATH="${EBROOTCUDNN}/lib64:${LD_LIBRARY_PATH}"
 #     for t in ${T[*]}
 #     do
 #         echo ">> T = $t"  >> run_train.log 2>&1
-#         julia train.jl "$c" "$t" "conv" "Y" "Y" >> run_train.log 2>&1
+#         julia train.jl "$c" "$t" "conv" "2" "retrain" >> run_train.log 2>&1
 #     done
 # done
 
@@ -34,6 +34,12 @@ for t in ${T2[*]}
 do
     echo ">> T = $t"  >> run_train.log 2>&1
     julia train.jl "case2869pegase" "$t" "conv" "Y" "Y" >> run_train.log 2>&1
+done
+
+for t in ${T2[*]}
+do
+    echo ">> T = $t"  >> run_train.log 2>&1
+    julia train.jl "case300" "$t" "conv" "2" "retrain" >> run_train.log 2>&1
 done
 
 
