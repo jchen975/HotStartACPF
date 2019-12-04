@@ -12,6 +12,7 @@ using LinearAlgebra
 using BSON, MAT  # saving and loading files
 using BSON: @save, @load
 using Dates
+import Base.time
 
 Random.seed!(7)  # mini-batch shuffling
 
@@ -96,12 +97,12 @@ end
 
 
 """
-    split_dataset(data::Array{Float32}, target::Array{Float32}, nn_type::String,
-            T::Float64)
+	split_dataset(data::Array{Float32}, target::Array{Float32},
+			nn_type::String, trainSplit::Int64, valSplit::Int64)
 Separate out training + validation set, and N ∖ T for "test set"
 """
 function split_dataset(data::Array{Float32}, target::Array{Float32},
-            nn_type::String, trainSplit::Int64, valSplit::Int64, failmode::Bool=false)
+            nn_type::String, trainSplit::Int64, valSplit::Int64)
     if nn_type == "mlp"  # flatten 3d data/target into 2d, [numBus * 4, N]
         data = vcat(data[:,:,1], data[:,:,2], data[:,:,3], data[:,:,4])
         if size(target,3) > 1  # if not trained separately
@@ -111,8 +112,8 @@ function split_dataset(data::Array{Float32}, target::Array{Float32},
         trainTarget = target[:, 1:trainSplit]
         valData = data[:, trainSplit+1:valSplit]
         valTarget = target[:, trainSplit+1:valSplit]
-        !failmode ? testData = data[:, valSplit+1:end] : testData = Nothing
-        !failmode ? testTarget = target[:, valSplit+1:end] : testTarget = Nothing
+        testData = data[:, valSplit+1:end]
+        testTarget = target[:, valSplit+1:end]
     elseif nn_type == "conv"
         # data is currently (numBus, N, numFeature) == HNC, need to add W
         # axis and flip N and C to be WHCN, don't need to touch target
@@ -125,8 +126,8 @@ function split_dataset(data::Array{Float32}, target::Array{Float32},
         trainTarget = target[:, 1:trainSplit]  # remove last dimension (is 1)
         valData = data[:, :, :, trainSplit+1:valSplit]
         valTarget = target[:, trainSplit+1:valSplit]
-        !failmode ? testData = data[:, :, :, valSplit+1:end] : testData = Nothing
-        !failmode ? testTarget = target[:, valSplit+1:end] : testTarget = Nothing
+        testData = data[:, :, :, valSplit+1:end]
+        testTarget = target[:, valSplit+1:end]
     else
         @warn("Type of NN unspecified. Failed to split dataset.")
         return Nothing
@@ -169,11 +170,11 @@ RETURN VALUES:
 """
 function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
-            epochs::Int64=500, bs::Int64=32)
+            epochs::Int64=50, bs::Int64=32)
     N = size(data, 2)
     trainSplit = round(Int64, N * T * 0.9)
     valSplit = round(Int64, N * T)
-    split_data = split_dataset(data, target, nn_type, trainSplit, valSplit, (T==1.0))
+    split_data = split_dataset(data, target, nn_type, trainSplit, valSplit)
     if split_data == Nothing
         return ()
     end
@@ -181,13 +182,8 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     trainTarget = split_data[2] |> gpu
     valData = split_data[3] |> gpu
     valTarget = split_data[4] |> gpu
-    if T < 1.0
-        testData = split_data[5] |> gpu
-        testTarget = split_data[6] |> gpu
-    else
-        @assert(split_data[5] == Nothing && split_data[6] == Nothing)
-        @assert(size(trainData)[end] + size(valData)[end] == N)
-    end
+    testData = split_data[5] |> gpu
+    testTarget = split_data[6] |> gpu
 
     nn_type == "conv" ? Fx = size(trainData,2) : Fx = size(trainData,1)
     model = build_model(nn_type, Fx, size(trainTarget,1), K)
@@ -205,6 +201,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
 
     opt = ADAM(lr)
     loss(x, y) = norm(y - model(x))  # Flux.mse(model(x), y)
+	# loss(x, y) = sum((y - model(x)).^2)
 	# function loss(x, y)  # berHu loss
 	#     x = model(x)
 	#     println(typeof(x), ",", typeof(y))
@@ -216,17 +213,14 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
 	# end
 
     # "accuracy": norm and Δnorm (as percentage of initial, return as untracked
-    pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
+    # pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
+	pred_norm(x::AbstractArray, y::AbstractArray) = norm(y - model(x))
     Δpred_norm(x::AbstractArray, y::AbstractArray, init::Float32) = pred_norm(x, y) / init
 
     # record loss/accuracy data for three
     init_train_norm = pred_norm(trainData, trainTarget)
     init_val_norm = pred_norm(valData, valTarget)  # for early stopping
-    if T < 1.0
-        init_test_norm = pred_norm(testData, testTarget)
-    else
-        init_test_norm = 1e9
-    end
+    init_test_norm = pred_norm(testData, testTarget)
 
     trainLoss, valLoss = Float32[], Float32[]
     epochTrainLoss, epochTrainErr = 0.0, 0.0
@@ -249,10 +243,10 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     last_improved_epoch, consec_decays_wo_imp = 1, 0
     train_norm = init_train_norm
     for epoch = 1:epochs
-        # println("epoch: $epoch")
         # record validation set loss/err values of current epoch before training
         # so that we know the val loss in the beginning
-        push!(valLoss, Tracker.data(loss(valData, valTarget)))
+        # push!(valLoss, Tracker.data(loss(valData, valTarget)))
+		push!(valLoss, loss(valData, valTarget))
         epochTrainLoss, epochTrainErr = 0.0, 0.0   # reset values
         Random.shuffle!(randIdx) # to shuffle training set
         i = 1
@@ -261,11 +255,12 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             nn_type == "conv" ? batchX = trainData[:,:,:,randIdx[i:i+bs]] : batchX = trainData[:,randIdx[i:i+bs]]
             batchY = trainTarget[:, randIdx[i:i+bs]]
             # record training time, excluding all overhead except train!()'s own
-            time = Base.time()
+            t = time()
             Flux.train!(loss, Flux.params(model), [(batchX, batchY)], opt)
-            training_time += Base.time() - time
+            training_time += time() - t
             # record training set loss every mini-batch
-            push!(trainLoss, Tracker.data(loss(batchX, batchY)))
+            # push!(trainLoss, Tracker.data(loss(batchX, batchY)))
+			push!(trainLoss, loss(batchX, batchY))
             i += bs + 1  # without +1 there will be overlap
             if i + bs > trainSplit  # out of bounds indexing check
                 break
@@ -273,7 +268,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         end
         elapsedEpochs = epoch
 
-        epoch % 50 == 0 && gpu_mem_util()
+        # epoch % 50 == 0 && gpu_mem_util()
 
         # stop training when validation set norm is 0.1% of the initial
         if Δpred_norm(valData, valTarget, init_val_norm) <= 1e-4
@@ -306,20 +301,17 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         @info("Training stopped at max epochs $epochs.")
     end
 
-    if T < 1.0
-        # calculate change in test norm compared to init
-        Δtest_norm = Δpred_norm(testData, testTarget, init_test_norm)
+    # calculate change in test norm compared to init
+    Δtest_norm = Δpred_norm(testData, testTarget, init_test_norm)
 
-        # forward pass
-        time = Base.time()
-        testPredict = model(testData)
-        fptime = Base.time() - time
+    # forward pass
+    t = time()
+    testPredict = model(testData)
+    fptime = time() - t
 
-        # get predicted values (untracked)
-        testPredict = cpu(Tracker.data(testPredict))
-    else
-        testPredict, Δtest_norm, fptime = Nothing, Nothing, Nothing
-    end
+    # get predicted values (untracked)
+    # testPredict = cpu(Tracker.data(testPredict))
+	testPredict = cpu(testPredict)
 
     # save final model weights (untracked)
     # model_weights = Flux.params(model)
@@ -339,16 +331,18 @@ end
 
 """
     forward(data::Array{Float32}, model_name::String, nn_type::String,
-                T::Float64, K::Int64, is_test::Bool=false)
+                T::Float64, K::Int64, test_is_split::Bool=false, failmode::Bool=false)
 
 Build model with untrained weights and load trained weights to model, then
-perform forward pass and save predicted values. By default, `split` which
-represents whether `data` are test set already split, is false. No `target`
-here because no training involved. Refer to `train_net` and `build_model` for
-arguement types and meanings.
+perform forward pass and save predicted values. By default, `test_is_split`
+which represents whether `data` is the test set already split out from the
+original dataset, is false. If `failmode` is `true`, we are performing forward
+pass on the samples in caseX_failed.mat, samples that failed to converge. No
+`target` here because no training involved. Refer to `train_net` and
+`build_model` for arguement types and meanings.
 """
 function forward(data::Array{Float32}, model_name::String, nn_type::String,
-                T::Float64, K::Int64, is_test::Bool=false)
+                T::Float64, K::Int64, test_is_split::Bool=false, failmode::Bool=false)
     if !isfile("$(model_name)")
 		@warn("Did not find a trained model with name `$(model_name)`")
         return false
@@ -373,16 +367,19 @@ function forward(data::Array{Float32}, model_name::String, nn_type::String,
     # @load "$(model_name)" weights
     # Flux.loadparams!(model, weights)
 	########################################################################
-	@load "$(model_name)" model
+	@load model_name model
     model = model |> gpu
 
-    # get the test set from data if is_test == false and send to GPU
-    if !is_test && T < 1.0
+    # get the test set from data if test_is_split == false (og dataset, train/val
+	# included) and send to GPU
+	# otherwise send complete data to GPU
+	# By default, do the split
+    if !test_is_split && !failmode
         data = data[:, round(Int, T*numSample)+1:end] |> gpu  # N \ T
     else
         data = data |> gpu
     end
-
+	println(typeof(data))
     t = time()
     predict = model(data)
     fptime = time() - t
@@ -390,7 +387,8 @@ function forward(data::Array{Float32}, model_name::String, nn_type::String,
             "$(round(fptime; digits=5)) seconds")
 	close(trainlog)
 
-    predict = cpu(Tracker.data(predict))
+    # predict = cpu(Tracker.data(predict))
+	predict = cpu(predict)
     return (true, predict, fptime)
 end
 
@@ -401,26 +399,26 @@ end
 Running in REPL:
 
     1. default hyperparameters:
-        ex. main(["case30", "0.2", "conv", "Y", "Y"])
+        ex. main(["case30", "0.2", "conv", "2", "retrain", "failmode"])
     2. custom hyperparameters:
-        ex. main(["case30", "0.2", "conv", "Y", "Y", "5e-4", "30", "64"])
+        ex. main(["case30", "0.2", "conv", "2", "retrain", "failmode", "5e-4", "30", "64"])
 
 Running on command line (assuming train.jl is in current directory):
 
     1. default hyperparameters:
     `/path/to/julia run_train.jl <case name> <train ratio> <nn_type>
-        <train separately Y/N> <retrain Y/N>`
+        <train 1/2 models> <retrain> <failmode>`
     2. custom hyperparameters (currently must be complete):
     `/path/to/julia run_train.jl <case name> <train ratio> <nn_type>
-        <train separately Y/N> <retrain Y/N> <learning rate> <epochs> <batch size>`
+        <train 1/2 models> <retrain> <failmode> <learning rate> <epochs> <batch size>`
 
 TODO: accommodate vararg hyperparameter set
 """
 function main(args::Array{String})
     error = false
     case = args[1]  # case name, is String
-    if length(args) != 8 && length(args) != 5
-        @warn("Incorrect number of arguments provided. Expected 5 or 8, received $(length(args))")
+    if length(args) != 6 && length(args) != 9
+        @warn("Incorrect number of arguments provided. Expected 6 or 9, received $(length(args))")
         error = true
     elseif !isfile("$(case)_dataset.mat")
         @warn("$case dataset not found in current directory. Exiting...")
@@ -433,13 +431,19 @@ function main(args::Array{String})
     # parse other arguments
     T = parse(Float64, args[2])  # ratio of training/val set (default = 0.2)
     nn_type = args[3]  # is a string
-    separate = (args[4]=="Y" || args[4]=="y") ? true : false  # train two models, one each for vm, va
-    retrain = (args[5]=="Y" || args[5]=="y") ? true : false  # if model(s) already trained
+    separate = (args[4]=="2") ? true : false  # train two models, one each for vm, va
+    retrain = (args[5]=="retrain") ? true : false  # if model(s) already trained
+	failmode = (args[6]=="failmode") ? true : false  # if also predicting for failed to converge samples
+	if failmode && !isfile("$(case)_failed.mat")
+        @warn("Failed samples for $case not found in current directory. Setting `failedmode` to false.")
+        failmode = false
+    end
+
     default_param = true
-    if length(args) == 8
-        lr = parse(Float64, args[6])
-        epochs = parse(Int64, args[7])
-        bs = parse(Int64, args[8])
+    if length(args) == 9
+        lr = parse(Float64, args[7])
+        epochs = parse(Int64, args[8])
+        bs = parse(Int64, args[9])
         default_param = false
     end
 
@@ -459,28 +463,28 @@ function main(args::Array{String})
     close(trainlog)
 
     # hidden layer size if nn_type is mlp, or 4 if ConvNet
-    K = (nn_type == "mlp") ? size(target, 1)*2 : 4
+    K = (nn_type == "conv") ? 4 : size(target, 1)*2
     numBus = size(data, 1)
 
     # if model already trained, try forward pass
     if !retrain
         success = false
-		if T == 1.0
+		if failmode
 			data = matread("$(case)_failed.mat")["fdata"]
 			@info("Forward pass for failed to converge samples based on models trained previously")
 		end
         if separate
-            ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K)
-            ret_vm = forward(data, "$(case)_vm_model_T=$(T).bson", nn_type, T, K)
+			# `test_is_split` keep default
+            ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, failmode)
+            ret_vm = forward(data, "$(case)_vm_model_T=$(T).bson", nn_type, T, K, false, failmode)
             success = ret_va[1] & ret_vm[1]
             if success
                 save_predict(case, T, ret_va[2], ret_vm[2])
                 return
 			end
-			@info("va $(ret_va[1]), vm $(ret_vm[1])")
 			@warn("Forward pass not successful.")
         else
-            ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K)
+            ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K, )
             success = ret[1]
             if success
                 save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
@@ -506,7 +510,7 @@ function main(args::Array{String})
             @warn("build_model() failed, exiting at $(now())")
             return
         end
-        if T < 1.0
+        if !failmode
             # save as .mat
             save_predict(case, T, ret_va[1], ret_vm[1])
             Δtest_norm_va = ret_va[2]
@@ -525,7 +529,7 @@ function main(args::Array{String})
             @warn("build_model() failed, exiting at $(now())")
             return
         end
-        if T < 1.0
+        if !failmode
             save_predict(case, T, ret[1][1:numBus, :], ret[1][numBus+1:end, :])
             Δtest_norm = ret[2]
             fptime = ret[3][2]
@@ -534,19 +538,31 @@ function main(args::Array{String})
     end
 
     # "test set" are samples that failed to converge in cold-start
-    if T == 1.0
+    if failmode
 		@info("Forward pass for failed to converge samples based on models trained just now")
         fdata = matread("$(case)_failed.mat")["fdata"]
-        ret_va = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
-        ret_vm = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, true)
-        success = ret_va[1] & ret_vm[1]
-        if success
-            save_predict(case, T, ret_va[2], ret_vm[2])
-            fptime = ret_va[3] + ret_vm[3]
-        else
-            @warn("Predicting failed cold-start samples not successful.")
-            fptime = 0
-        end
+		@info("Failed to converge dataset loaded at $(now())")
+		if separate
+			# failmode == true
+	        ret_va = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, true)
+	        ret_vm = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, true)
+	        success = ret_va[1] & ret_vm[1]
+	        if success
+	            save_predict(case, T, ret_va[2], ret_vm[2])
+	            fptime = ret_va[3] + ret_vm[3]
+	        else
+	            @warn("Predicting failed cold-start samples not successful.")
+	            fptime = 0
+	        end
+		else
+			ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K, true, true)
+			success = ret[1]
+			if success
+				save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
+				return
+			end
+			@warn("Predicting failed cold-start samples not successful.")
+		end
     end
 
     # write result to file
@@ -578,4 +594,4 @@ function main(args::Array{String})
     @info("Program finished at $(now()). Exiting...")
 end
 
-main(ARGS)  # uncomment this when running on command line
+# main(ARGS)  # uncomment this when running on command line
