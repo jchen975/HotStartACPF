@@ -48,7 +48,6 @@ ARGUMENTS:
     type: a string, either "mlp" or "conv"
     Fx, Fy: integers, input and output feature size
     K: an integer, hidden layer size for MLP or input channel number for ConvNet
-
 """
 function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
     actfn = elu  # ELU activation function; seems to work better than ReLU/LeakyReLU
@@ -166,11 +165,10 @@ RETURN VALUES:
     with size numBus by numTestSamples, Δtest_norm is a number between 0 and 1
     representing the final norm of (true - testPredict), and fptime is the time
     for test set forward pass at the end of training.
-
 """
 function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             nn_type::String, T::Float64, K::Int64, lr::Float64=1e-3,
-            epochs::Int64=50, bs::Int64=32)
+            epochs::Int64=500, bs::Int64=32)
     N = size(data, 2)
     trainSplit = round(Int64, N * T * 0.9)
     valSplit = round(Int64, N * T)
@@ -199,14 +197,11 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     println(trainlog, "  >> $model")
     close(trainlog)
 
-    opt = ADAM(lr)
-    loss(x, y) = norm(y - model(x))  # Flux.mse(model(x), y)
-	# loss(x, y) = sum((y - model(x)).^2)
+	opt = ADAM(lr)
+	loss(x, y) = sum((y - model(x)).^2)
 	# function loss(x, y)  # berHu loss
 	#     x = model(x)
-	#     println(typeof(x), ",", typeof(y))
 	#     bound = 0.2*maximum(abs.(x-y))
-	#     @warn("bound = $bound")
 	#     inbound = abs.(x-y) .<= bound
 	#     l = sum(inbound .* norm.((x-y), 1) + .!inbound .* (sum((x-y).^2 .+ bound^2)/(2*bound))) / (size(y,1)*size(y,2))
 	#     return l
@@ -582,7 +577,7 @@ function main(args::Array{String})
             println(trainlog, "  >> L2 norm of (true - predict) VA = $(Δtest_norm_va*100)% of initial")
             println(trainlog, "  >> L2 norm of (true - predict) VM = $(Δtest_norm_vm*100)% of initial")
         else
-            println(trainlog, "  >> L2 norm of (true - predict) = $(Δtest_norm*100)% of initial")
+            println(trainlog, "  >> L2 norm of (true - predict): $(Δtest_norm*100)% of initial")
         end
     else
         println(trainlog, "Test set results (prediction for failed to converge samples only):")
