@@ -207,8 +207,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
 	#     return l
 	# end
 
-    # "accuracy": norm and Δnorm (as percentage of initial, return as untracked
-    # pred_norm(x::AbstractArray, y::AbstractArray) = Tracker.data(norm(y - model(x)))
+    # "accuracy": norm and Δnorm (as percentage of initial
 	pred_norm(x::AbstractArray, y::AbstractArray) = norm(y - model(x))
     Δpred_norm(x::AbstractArray, y::AbstractArray, init::Float32) = pred_norm(x, y) / init
 
@@ -240,7 +239,6 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     for epoch = 1:epochs
         # record validation set loss/err values of current epoch before training
         # so that we know the val loss in the beginning
-        # push!(valLoss, Tracker.data(loss(valData, valTarget)))
 		push!(valLoss, loss(valData, valTarget))
         epochTrainLoss, epochTrainErr = 0.0, 0.0   # reset values
         Random.shuffle!(randIdx) # to shuffle training set
@@ -254,7 +252,6 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             Flux.train!(loss, Flux.params(model), [(batchX, batchY)], opt)
             training_time += time() - t
             # record training set loss every mini-batch
-            # push!(trainLoss, Tracker.data(loss(batchX, batchY)))
 			push!(trainLoss, loss(batchX, batchY))
             i += bs + 1  # without +1 there will be overlap
             if i + bs > trainSplit  # out of bounds indexing check
@@ -304,11 +301,10 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     testPredict = model(testData)
     fptime = time() - t
 
-    # get predicted values (untracked)
-    # testPredict = cpu(Tracker.data(testPredict))
+    # get predicted values
 	testPredict = cpu(testPredict)
 
-    # save final model weights (untracked)
+    # save final model weights 
     # model_weights = Flux.params(model)
 	model = cpu(model)
     BSON.@save "$(case)_model_T=$(T).bson" model
@@ -382,7 +378,6 @@ function forward(data::Array{Float32}, model_name::String, nn_type::String,
             "$(round(fptime; digits=5)) seconds")
 	close(trainlog)
 
-    # predict = cpu(Tracker.data(predict))
 	predict = cpu(predict)
     return (true, predict, fptime)
 end
@@ -589,4 +584,4 @@ function main(args::Array{String})
     @info("Program finished at $(now()). Exiting...")
 end
 
-# main(ARGS)  # uncomment this when running on command line
+main(ARGS)  # uncomment this when running on command line
