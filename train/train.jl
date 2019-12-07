@@ -1,9 +1,10 @@
-"""
-    `using CuArrays`
-We assume there is CUDA hardware; if error(s) are reported, comment it out and
-`|> gpu` will be no-ops
-"""
-
+################################################################################
+# We assume there is CUDA hardware; if error(s) are reported, comment
+# `using CuArrays` out and `|> gpu` will be no-ops
+#
+# This file requires Flux v0.10.0 since I removed all `Tracker` related code,
+# and it works best with the most recent version of CuArrays on Julia 1.3.0
+################################################################################
 using CUDAdrv, CuArrays, Flux  # GPU, ML libraries
 using Flux.Optimise: ADAM
 using Statistics # to use mean()
@@ -23,7 +24,6 @@ CuArrays.culiteral_pow(::typeof(^), x::ForwardDiff.Dual{Nothing,Float32,1}, ::Va
 # GPU memory utilization rate
 gpu_mem_util() = @info("GPU memory utilization rate: " *
         "$(round((CUDAdrv.available_memory() / CUDAdrv.total_memory()); digits=3)*100)%")
-
 
 """
     save_predict(case::String, T::Float64, va::Array{Float32}, vm::Array{Float32})
@@ -69,23 +69,23 @@ function build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
         # for cases with more than 300 buses, first kernel length is 7 instead
         # of 3 for smaller cases
         if Fx <= 300
-			model = Chain(
-	            Conv((1,3), K=>channels[1], pad=(0,1), actfn),
-	            Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
-	            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
-				x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
-	            Dense(final_hidden, Fy)
-			)
+            model = Chain(
+                Conv((1,3), K=>channels[1], pad=(0,1), actfn),
+                Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
+                Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
+                x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
+                Dense(final_hidden, Fy)
+            )
         else
-			model = Chain(
-				Conv((1,7), K=>channels[1], pad=(0,3), actfn),
-				Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
-	            Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
-				Conv((1,3), channels[3]=>channels[4], pad=(0,1), actfn),
-		    	Conv((1,3), channels[4]=>channels[5], pad=(0,1), actfn),
-		    	x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
-	            Dense(final_hidden, Fy)
-			)
+            model = Chain(
+                Conv((1,7), K=>channels[1], pad=(0,3), actfn),
+                Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
+                Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
+                Conv((1,3), channels[3]=>channels[4], pad=(0,1), actfn),
+                Conv((1,3), channels[4]=>channels[5], pad=(0,1), actfn),
+                x -> reshape(x, (:, size(x, 4))),  # size(x, 4) = N, reshape to W*H*C by N
+                Dense(final_hidden, Fy)
+            )
         end
     else
         @warn("Type of NN unspecified. Failed to build model.")
@@ -96,8 +96,8 @@ end
 
 
 """
-	split_dataset(data::Array{Float32}, target::Array{Float32},
-			nn_type::String, trainSplit::Int64, valSplit::Int64)
+    split_dataset(data::Array{Float32}, target::Array{Float32},
+            nn_type::String, trainSplit::Int64, valSplit::Int64)
 Separate out training + validation set, and N ∖ T for "test set"
 """
 function split_dataset(data::Array{Float32}, target::Array{Float32},
@@ -197,18 +197,18 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     println(trainlog, "  >> $model")
     close(trainlog)
 
-	opt = ADAM(lr)
-	loss(x, y) = sum((y - model(x)).^2)
-	# function loss(x, y)  # berHu loss
-	#     x = model(x)
-	#     bound = 0.2*maximum(abs.(x-y))
-	#     inbound = abs.(x-y) .<= bound
-	#     l = sum(inbound .* norm.((x-y), 1) + .!inbound .* (sum((x-y).^2 .+ bound^2)/(2*bound))) / (size(y,1)*size(y,2))
-	#     return l
-	# end
+    opt = ADAM(lr)
+    loss(x, y) = sum((y - model(x)).^2)
+    # function loss(x, y)  # berHu loss
+    #     x = model(x)
+    #     bound = 0.2*maximum(abs.(x-y))
+    #     inbound = abs.(x-y) .<= bound
+    #     l = sum(inbound .* norm.((x-y), 1) + .!inbound .* (sum((x-y).^2 .+ bound^2)/(2*bound))) / (size(y,1)*size(y,2))
+    #     return l
+    # end
 
     # "accuracy": norm and Δnorm (as percentage of initial
-	pred_norm(x::AbstractArray, y::AbstractArray) = norm(y - model(x))
+    pred_norm(x::AbstractArray, y::AbstractArray) = norm(y - model(x))
     Δpred_norm(x::AbstractArray, y::AbstractArray, init::Float32) = pred_norm(x, y) / init
 
     # record loss/accuracy data for three
@@ -239,7 +239,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     for epoch = 1:epochs
         # record validation set loss/err values of current epoch before training
         # so that we know the val loss in the beginning
-		push!(valLoss, loss(valData, valTarget))
+        push!(valLoss, loss(valData, valTarget))
         epochTrainLoss, epochTrainErr = 0.0, 0.0   # reset values
         Random.shuffle!(randIdx) # to shuffle training set
         i = 1
@@ -252,7 +252,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             Flux.train!(loss, Flux.params(model), [(batchX, batchY)], opt)
             training_time += time() - t
             # record training set loss every mini-batch
-			push!(trainLoss, loss(batchX, batchY))
+            push!(trainLoss, loss(batchX, batchY))
             i += bs + 1  # without +1 there will be overlap
             if i + bs > trainSplit  # out of bounds indexing check
                 break
@@ -302,11 +302,11 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
     fptime = time() - t
 
     # get predicted values
-	testPredict = cpu(testPredict)
+    testPredict = cpu(testPredict)
 
-    # save final model weights 
+    # save final model weights
     # model_weights = Flux.params(model)
-	model = cpu(model)
+    model = cpu(model)
     BSON.@save "$(case)_model_T=$(T).bson" model
 
     # save loss and accuracy data
@@ -335,50 +335,50 @@ pass on the samples in caseX_failed.mat, samples that failed to converge. No
 function forward(data::Array{Float32}, model_name::String, nn_type::String,
                 T::Float64, K::Int64, test_is_split::Bool=false, failmode::Bool=false)
     if !isfile("$(model_name)")
-		@warn("Did not find a trained model with name `$(model_name)`")
+        @warn("Did not find a trained model with name `$(model_name)`")
         return false
     end
-	case = split(model_name, "_")[1]
+    case = split(model_name, "_")[1]
     trainlog = open("$(case)_train_output.log", "a")
     println(trainlog, "Performing forward pass for $(case) at $(now())")
 
     # build model with untrained weights
-	numBus, numSample = size(data)
-	if nn_type == "conv"
-		data = permutedims(data, [1,3,2])
+    numBus, numSample = size(data)
+    if nn_type == "conv"
+        data = permutedims(data, [1,3,2])
         data = reshape(data, (1, size(data,1), size(data,2), size(data,3)))
-	end
-	############## should be saving and loading model weights ###############
+    end
+    ############## should be saving and loading model weights ###############
     # model = build_model(nn_type, numBus, numBus, K)
     # if model == Nothing
     #     return (false,)
     # end
-	#
+    #
     # # load trained weights to model and send to GPU
     # @load "$(model_name)" weights
     # Flux.loadparams!(model, weights)
-	########################################################################
-	@load model_name model
+    ########################################################################
+    @load model_name model
     model = model |> gpu
 
     # get the test set from data if test_is_split == false (og dataset, train/val
-	# included) and send to GPU
-	# otherwise send complete data to GPU
-	# By default, do the split
+    # included) and send to GPU
+    # otherwise send complete data to GPU
+    # By default, do the split
     if !test_is_split && !failmode
         data = data[:, round(Int, T*numSample)+1:end] |> gpu  # N \ T
     else
         data = data |> gpu
     end
-	println(typeof(data))
+    println(typeof(data))
     t = time()
     predict = model(data)
     fptime = time() - t
     println(trainlog, "Forward pass with $(numSample) samples took " *
             "$(round(fptime; digits=5)) seconds")
-	close(trainlog)
+    close(trainlog)
 
-	predict = cpu(predict)
+    predict = cpu(predict)
     return (true, predict, fptime)
 end
 
@@ -423,8 +423,8 @@ function main(args::Array{String})
     nn_type = args[3]  # is a string
     separate = (args[4]=="2") ? true : false  # train two models, one each for vm, va
     retrain = (args[5]=="retrain") ? true : false  # if model(s) already trained
-	failmode = (args[6]=="failmode") ? true : false  # if also predicting for failed to converge samples
-	if failmode && !isfile("$(case)_failed.mat")
+    failmode = (args[6]=="failmode") ? true : false  # if also predicting for failed to converge samples
+    if failmode && !isfile("$(case)_failed.mat")
         @warn("Failed samples for $case not found in current directory. Setting `failedmode` to false.")
         failmode = false
     end
@@ -459,30 +459,30 @@ function main(args::Array{String})
     # if model already trained, try forward pass
     if !retrain
         success = false
-		if failmode
-			data = matread("$(case)_failed.mat")["fdata"]
-			@info("Forward pass for failed to converge samples based on models trained previously")
-		end
+        if failmode
+            data = matread("$(case)_failed.mat")["fdata"]
+            @info("Forward pass for failed to converge samples based on models trained previously")
+        end
         if separate
-			# `test_is_split` keep default
+            # `test_is_split` keep default
             ret_va = forward(data, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, failmode)
             ret_vm = forward(data, "$(case)_vm_model_T=$(T).bson", nn_type, T, K, false, failmode)
             success = ret_va[1] & ret_vm[1]
             if success
                 save_predict(case, T, ret_va[2], ret_vm[2])
                 return
-			end
-			@warn("Forward pass not successful.")
+            end
+            @warn("Forward pass not successful.")
         else
             ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K, )
             success = ret[1]
             if success
                 save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
                 return
-			end
-			@warn("Forward pass not successful.")
+            end
+            @warn("Forward pass not successful.")
         end
-		return
+        return
     end
 
     # training functions, will enter from forward pass above if unsuccessful
@@ -529,30 +529,30 @@ function main(args::Array{String})
 
     # "test set" are samples that failed to converge in cold-start
     if failmode
-		@info("Forward pass for failed to converge samples based on models trained just now")
+        @info("Forward pass for failed to converge samples based on models trained just now")
         fdata = matread("$(case)_failed.mat")["fdata"]
-		@info("Failed to converge dataset loaded at $(now())")
-		if separate
-			# failmode == true
-	        ret_va = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, true)
-	        ret_vm = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, true)
-	        success = ret_va[1] & ret_vm[1]
-	        if success
-	            save_predict(case, T, ret_va[2], ret_vm[2])
-	            fptime = ret_va[3] + ret_vm[3]
-	        else
-	            @warn("Predicting failed cold-start samples not successful.")
-	            fptime = 0
-	        end
-		else
-			ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K, true, true)
-			success = ret[1]
-			if success
-				save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
-				return
-			end
-			@warn("Predicting failed cold-start samples not successful.")
-		end
+        @info("Failed to converge dataset loaded at $(now())")
+        if separate
+            # failmode == true
+            ret_va = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, true)
+            ret_vm = forward(fdata, "$(case)_va_model_T=$(T).bson", nn_type, T, K, false, true)
+            success = ret_va[1] & ret_vm[1]
+            if success
+                save_predict(case, T, ret_va[2], ret_vm[2])
+                fptime = ret_va[3] + ret_vm[3]
+            else
+                @warn("Predicting failed cold-start samples not successful.")
+                fptime = 0
+            end
+        else
+            ret = forward(data, "$(case)_model_T=$(T).bson", nn_type, T, K, true, true)
+            success = ret[1]
+            if success
+                save_predict(case, T, ret[2][1:numBus, :], ret[2][numBus+1:end, :])
+                return
+            end
+            @warn("Predicting failed cold-start samples not successful.")
+        end
     end
 
     # write result to file
