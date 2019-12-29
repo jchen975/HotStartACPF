@@ -8,7 +8,7 @@ struct BerhuLoss{T<:AbstractFloat} <: DistanceLoss
     end
 end
 
-BerhuLoss(c::T=0.0) where {T<:AbstractFloat} = BerhuLoss{T}(c)  # default to L2
+BerhuLoss(c::T=1e-6) where {T<:AbstractFloat} = BerhuLoss{T}(c)  # default to L2
 BerhuLoss(c) = BerhuLoss{Float64}(Float64(c))
 
 function value(loss::BerhuLoss{T1}, difference::T2) where {T1,T2<:Number}
