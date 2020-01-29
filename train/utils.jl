@@ -1,6 +1,6 @@
 module NNUtils
 
-using CUDAdrv
+using CUDAdrv, Flux, MAT
 using CUDAdrv.Mem
 
 export gpu_mem_util, save_predict, build_model
@@ -25,10 +25,10 @@ end
 
 
 """
-    build_model(type::String, Fx::Int64, Fy::Int64, K::Int64)
+    build_model(numBus::Int64)
 Returns a 1D ConvNet with initial C=4, and final C=1
 """
-function build_model(type::String, numBus::Int64)
+function build_model(numBus::Int64)
     actfn = elu
     # W = 1, H = numBus, C = 4 , N = numSample
     # data needs to be in WHCN format (so conv filter is 1 by x)
