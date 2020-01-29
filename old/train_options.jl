@@ -250,8 +250,8 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
         i = 1
         for j = 1:numBatches
             # get batch data, target
-            nn_type == "conv" ? batchX = trainData[:,:,:,randIdx[i:i+bs]] : batchX = trainData[:,randIdx[i:i+bs]]
-            batchY = trainTarget[:, randIdx[i:i+bs]]
+            nn_type == "conv" ? batchX = trainData[:,:,:,randIdx[i:i+bs-1]] : batchX = trainData[:,randIdx[i:i+bs-1]]
+            batchY = trainTarget[:, randIdx[i:i+bs-1]]
             # diff = model(batchX) .- batchY
             # c = 0.2*maximum(abs.(diff))
             # loss.c = c
@@ -263,7 +263,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             training_time += time() - t
             # record training set loss every mini-batch
             push!(trainLoss, loss(batchX, batchY))
-            i += bs + 1  # without +1 there will be overlap
+            i += bs  # without +1 there will be overlap
             if i + bs > trainSplit  # out of bounds indexing check
                 break
             end
