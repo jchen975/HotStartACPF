@@ -2,17 +2,17 @@ function data_gen()
 %     case300: 8955/10000 failed
 %     case1354pegase: 38/10000 failed
 %     case13659pegase: 7550/10000 failed 
-%     cases = ["case30", "case118", "case2869pegase"]; %, "case3375wp"];
-    cases = ["case300", "case13659pegase"];
-%     cases = ["case2869pegase"];
-    N = 100000;
-
+    cases = ["case118", "case2869pegase"]; 
+%     cases = ["case300", "case13659pegase"];
+%     cases = ["case300"];
+    N = 20000;
+    
     for c = cases
         %% PF based on PQ variations
         c = char(c);  % weird matlab string format
         [P, Q, Pp, Qp] = pq_var(c, N);
         [DCVM, DCVA, et_dc] = dc(c, P, Q);  % fail_dc should be []
-        [ACVM, ACVA, et_ac, itr_ac, fail, mismatch_cold] = ac_cold(c, P, Q);
+        [ACVM, ACVA, et_ac, itr_ac, fail, mismatch_cold] = ac_cold(c, P, Q, DCVA, DCVM);
 
         %% Error check and remove all failed sample columns, if they exist
         % move failed P, Q (in per unit difference) and DC vm, va results
@@ -58,6 +58,8 @@ function data_gen()
         data = zeros([size(DCVM,1), size(DCVM,2), 4], 'single');
         data(:, :, 1) = DCVA;
         data(:, :, 2) = DCVM;  % include this for PV bus vm
+%         data(:, :, 1) = zeros(size(DCVM));
+%         data(:, :, 2) = zeros(size(DCVA));
         data(:, :, 3) = Pp;
         data(:, :, 4) = Qp;
         target = zeros([size(ACVM,1), size(ACVM,2), 2], 'single');
@@ -67,7 +69,7 @@ function data_gen()
         save(['./results/', c, '_dataset.mat'], 'data', 'target', 'P', 'Q');
         save(['./results/', c, '_perf_cold.mat'], 'mismatch_cold', 'itr_ac', 'et_ac', 'et_dc', 'fail'); %, 'norm_va', 'norm_vm');
         
-        perf(c, 'cold', '');
     end
+        perf(c, 'cold', '');
     fprintf('Data generation finished.\n\n');
 end
