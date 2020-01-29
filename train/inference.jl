@@ -35,7 +35,7 @@ function inference(data::Array{Float32}, model_name::String, failmode::Bool=fals
     fptime = time() - t
 
     predict = cpu(predict)
-    return (true, predict, fptime)
+    return (predict, fptime)
 end
 
 """
@@ -85,12 +85,7 @@ function main(args::Array{String})
 
     ret_va = inference(data, "$(case)_va_model_T=$(T).bson", failmode)
     ret_vm = inference(data, "$(case)_vm_model_T=$(T).bson", failmode)
-    success = ret_va[1] & ret_vm[1]
-    if success
-        save_predict(case, T, ret_va[2], ret_vm[2])
-    else
-        @warn("Forward pass not successful.")
-    end
+    save_predict(case, T, ret_va[2], ret_vm[2])
 
     fptime = ret_vm[3] + ret_va[3]
     inferlog = open("$(case)_infer_output.log", "a")
