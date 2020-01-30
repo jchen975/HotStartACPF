@@ -47,7 +47,7 @@ function build_model(numBus::Int64)
         )
     else
         model = Chain(
-            Conv((1,7), K=>channels[1], pad=(0,3), actfn),
+            Conv((1,7), 4=>channels[1], pad=(0,3), actfn),
             Conv((1,3), channels[1]=>channels[2], pad=(0,1), actfn),
             Conv((1,3), channels[2]=>channels[3], pad=(0,1), actfn),
             Conv((1,3), channels[3]=>channels[4], pad=(0,1), actfn),
