@@ -59,4 +59,11 @@ function build_model(numBus::Int64)
     return model
 end
 
+function berhuLoss(x, y)
+    ŷ = model(x)
+    c = 0.2*maximum(ŷ - y)
+    diff = abs.(ŷ - y)
+    return mean((diff .< c).*diff + (diff .> c).*(diff.^2 .+ c^2)./(2*c))
+end
+
 end
