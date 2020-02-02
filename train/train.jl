@@ -7,9 +7,10 @@
 # as of January 2020
 ################################################################################
 using CuArrays, Flux, ForwardDiff  # GPU, ML libraries
+using Flux: train!, params
 using Flux.Optimise: ADAM
 using Random  # shuffling for mini batch; not setting a random seed here
-using LinearAlgebra
+using LinearAlgebra, Statistics
 using BSON, MAT  # saving and loading files
 using BSON: @save, @load
 using Dates
@@ -55,7 +56,7 @@ loss and accuracy data in current directory. If `failmode` is true, then also
 compute inference before saving the model, and save its fp time.
 """
 function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
-            T::Int64, failmode::Bool=false, lr::Float64=1e-3, epochs::Int64=5,
+            T::Int64, failmode::Bool=false, lr::Float64=1e-3, epochs::Int64=500,
             bs::Int64=32)
     N = size(data, 2)
     trainSplit = round(Int64, T*0.9)
@@ -71,6 +72,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
 
     model = build_model(size(trainData,2))
     model = model |> gpu
+    @info(model)
 
     # log model architecture
     casename = split(case, "_")[1]  # ex. case30_va => case30
@@ -123,7 +125,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
             batchY = trainTarget[:, randIdx[i:i+bs-1]]
             # record training time, excluding all overhead except train!()'s own
             t = time()
-            Flux.train!(loss, Flux.params(model), [(batchX, batchY)], opt)
+            train!(loss, params(model), [(batchX, batchY)], opt)
             training_time += time() - t
             # record training set loss every mini-batch
             push!(trainLoss, loss(batchX, batchY))
@@ -132,6 +134,7 @@ function train_net(data::Array{Float32}, target::Array{Float32}, case::String,
                 break
             end
         end
+        epoch % 50 == 0 && @info("epoch $epoch, loss = $(trainLoss[end])")
         elapsedEpochs = epoch
 
         # epoch % 50 == 0 && gpu_mem_util()
@@ -214,7 +217,6 @@ Example usage
 - on command line: julia inference.jl "case118" "2000" "retrain" "failmode"
 """
 function main(args::Array{String})
-    error = false
     case = args[1]  # case name, is String
     T = parse(Int64, args[2])  # number of samples in training+val set (default = 2000)
     retrain = (args[3]=="retrain") ? true : false
