@@ -59,6 +59,8 @@ function build_model(numBus::Int64)
     return model
 end
 
+
+# As of Feb 1st, it only works on CPU: https://github.com/FluxML/Zygote.jl/issues/495
 function berhuLoss(x, y)
     ŷ = model(x)
     c = 0.2*maximum(ŷ - y)
