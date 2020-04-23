@@ -1,4 +1,4 @@
-Finding hot start conditions for AC Power Flow based on Newton-Raphson Algorithm with 1D CNNs.
+Finding hot start conditions for AC Power Flow based on Newton-Raphson Algorithm with 1D CNNs. Preprint: https://arxiv.org/abs/2004.09342v1
 
 With DCPF as input, the trained 1D CNNs predict hot start conditions (voltage magnitude and phase at each bus) that minize NR iterations and solution time. Power flow code written in Matlab with Matpower, and CNN implementation and training written in Julia. Currently only considering load demand variations in data generation. 
 
